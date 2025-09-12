@@ -1,14 +1,13 @@
 import { ALIASES, PARENS, QUOTES, BRACKETS, NEGATORS, ARRAY_DELIMITERS } from './spec'
 
 export const ESCAPE_REGEX = '(?<=(?<!\\\\)(?:\\\\\\\\)*)'
-const QUOTE_REGEX_STR = `${ESCAPE_REGEX}(?<quote>${QUOTES.map((q) => RegExp.escape(q)).join('|')})(?<quotecontent>.*?)${ESCAPE_REGEX}\\k<quote>`
 
 /**
  * Create a Regex to look for quotes
  * @returns The regular expression
  */
 export function createQuoteRegexString (): string {
-  return QUOTE_REGEX_STR
+  return `${ESCAPE_REGEX}(?<quote>${QUOTES.map((q) => RegExp.escape(q)).join('|')})(?<quotecontent>.*?)${ESCAPE_REGEX}\\k<quote>`
 }
 
 /**
@@ -16,6 +15,8 @@ export function createQuoteRegexString (): string {
  * @returns The regular expression
  */
 export function createTokenRegexString (): string {
+  const QUOTE_REGEX_STR = createQuoteRegexString()
+
   const tokens = ALIASES
     .concat(PARENS.flat())
     .concat(BRACKETS.flat())
