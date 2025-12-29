@@ -49,7 +49,7 @@ export function summarize (expressions: Expression | Expression[]): Map<string, 
       collection.push({
         operation: expression.operation,
         value: expression.value,
-        exclusionary: ['NOTEQUAL', 'LESS', 'GREATER', 'NOTIN'].includes(expression.operation)
+        exclusionary: ['NOTEQUAL', 'LESS', 'GREATER', 'NOTIN', 'NOTMATCHES'].includes(expression.operation)
       })
     }
   }
