@@ -1,5 +1,5 @@
 export type FieldType = 'boolean' | 'string' | 'number' | 'date'
-type OperatorType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
+type OperatorType = 'junction' | 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
 
 interface OperatorDefinition {
   name: string
@@ -102,39 +102,57 @@ export interface WizardParserConfig<T extends FieldTypeRecord, O extends Operato
   dialects?: Record<D, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
 }
 
-// function foo<T extends TypeRecord, V extends boolean, O extends OperatorDefinition, D extends string> (p: WizardParserConfig<T, V, O, D>) {
-
-// }
-
-// foo({
-//   operators: [
-//     {
-//       name: 'EQUALS',
-//       negationName: 'NOTEQUALS',
-//       type: 'primitive',
-//       aliases: ['='],
-//       negationAliases: ['!=']
-//     }
-//   ],
-//   dialects: {
-//     bruh: {
-//       EQUALS: 'foo',
-//       NOTEQUALS: 'bar'
-//     }
-//   }
-// })
-
 class WizardParser<const T extends FieldTypeRecord, const O extends OperatorRecord, const V extends boolean, const D extends string> {
-  protected readonly QUOTES = ['\'', '"', '`']
-  protected readonly NEGATORS = ['!']
-  protected readonly ARRAY_DELIMITERS = [',']
+  static readonly DEFAULT_OPERATORS = {
+    AND: {
+      negationName: 'OR',
+      type: 'junction',
+      aliases: ['&&', '&', '^'],
+      negationAliases: ['||', '|', 'V']
+    },
 
-  protected readonly ARRAY_BRACKETS: Array<[open: string, close: string]> = [
+    EQUAL: {
+      negationName: 'NOTEQUAL',
+      type: 'primitive',
+      aliases: ['EQUALS', 'EQ', 'IS', '=', '=='],
+      negationAliases: ['NOTEQUAL', 'NOTEQUALS', 'NEQ', 'ISNT', '!=', '!==']
+    },
+    LESS: {
+      negationName: 'GEQ',
+      type: 'numeric',
+      aliases: ['<'],
+      negationAliases: ['>=', '=>']
+    },
+    GREATER: {
+      negationName: 'LEQ',
+      type: 'numeric',
+      aliases: ['>', 'MORE', 'MORETHAN'],
+      negationAliases: ['<=', '=<']
+    },
+    IN: {
+      negationName: 'NOTIN',
+      type: 'array',
+      aliases: [':'],
+      negationAliases: ['!:']
+    },
+    MATCH: {
+      negationName: 'NOTMATCE',
+      type: 'string',
+      aliases: ['MATCHES', '~'],
+      negationAliases: ['NOTMATCHES', '!~']
+    }
+  } as const satisfies OperatorRecord
+
+  protected static readonly QUOTES = ['\'', '"', '`']
+  protected static readonly NEGATORS = ['!']
+  protected static readonly ARRAY_DELIMITERS = [',']
+
+  protected static readonly ARRAY_BRACKETS: Array<[open: string, close: string]> = [
     ['[', ']'],
     ['{', '}']
   ]
 
-  protected readonly GROUP_PARENS: Array<[open: string, close: string]> = [
+  protected static readonly GROUP_PARENS: Array<[open: string, close: string]> = [
     ['(', ')']
   ]
 
