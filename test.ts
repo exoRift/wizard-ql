@@ -1,3 +1,73 @@
+/* eslint-disable @stylistic/quote-props */
+export const QUOTES = ['\'', '"', '`']
+export const BRACKETS: Array<[open: string, close: string]> = [
+  ['[', ']'],
+  ['{', '}']
+]
+export const PARENS: Array<[open: string, close: string]> = [
+  ['(', ')']
+]
+export const NEGATORS = ['!']
+export const ARRAY_DELIMITERS = [',']
+
+/** All available operation aliases (alias -> operation) */
+export const OPERATION_ALIAS_DICTIONARY = {
+  // NOTE: Longer tokens that encompass others must be first so that they are matched first in the Regex
+  'AND': 'AND',
+  '&&': 'AND',
+  '&': 'AND',
+  '^': 'AND',
+
+  'OR': 'OR',
+  '||': 'OR',
+  '|': 'OR',
+  'V': 'OR',
+
+  'GEQ': 'GEQ',
+  '>=': 'GEQ',
+  '=>': 'GEQ',
+
+  'LEQ': 'LEQ',
+  '<=': 'LEQ',
+  '=<': 'LEQ',
+
+  'NOTEQUALS': 'NOTEQUAL',
+  'NOTEQUAL': 'NOTEQUAL',
+  'NEQ': 'NOTEQUAL',
+  'ISNT': 'NOTEQUAL',
+  '!==': 'NOTEQUAL',
+  '!=': 'NOTEQUAL',
+
+  'EQUALS': 'EQUAL',
+  'EQUAL': 'EQUAL',
+  'EQ': 'EQUAL',
+  'IS': 'EQUAL',
+  '==': 'EQUAL',
+  '=': 'EQUAL',
+
+  'LESS': 'LESS',
+  '<': 'LESS',
+
+  'GREATER': 'GREATER',
+  '>': 'GREATER',
+  'MORE': 'GREATER',
+
+  'NOTIN': 'NOTIN',
+  '!:': 'NOTIN',
+
+  'IN': 'IN',
+  ':': 'IN',
+
+  'NOTMATCHES': 'NOTMATCH',
+  'NOTMATCH': 'NOTMATCH',
+  '!~': 'NOTMATCH',
+
+  'MATCHES': 'MATCH',
+  'MATCH': 'MATCH',
+  '~': 'MATCH'
+} as const
+/* eslint-enable @stylistic/quote-props */
+
 export interface Token {
   /** The text content of the token */
   content: string
@@ -5,6 +75,47 @@ export interface Token {
   index: number
 }
 
+export type Operation = (typeof OPERATION_ALIAS_DICTIONARY)[keyof typeof OPERATION_ALIAS_DICTIONARY]
+
+export const ALIASES = Object.keys(OPERATION_ALIAS_DICTIONARY)
+
+/** All base operations and their type */
+export const OPERATION_PURPOSE_DICTIONARY = {
+  AND: 'junction',
+  OR: 'junction',
+  EQUAL: 'comparison',
+  NOTEQUAL: 'comparison',
+  LESS: 'comparison',
+  GREATER: 'comparison',
+  GEQ: 'comparison',
+  LEQ: 'comparison',
+  IN: 'comparison',
+  NOTIN: 'comparison',
+  MATCH: 'comparison',
+  NOTMATCH: 'comparison'
+} as const satisfies Record<Operation, 'junction' | 'comparison'>
+
+type KeysWhereValue<T, V> = Exclude<{
+  [K in keyof T]: T[K] extends V ? K : never
+}[keyof T], never>
+
+export type JunctionOperation = KeysWhereValue<typeof OPERATION_PURPOSE_DICTIONARY, 'junction'>
+export type ComparisonOperation = KeysWhereValue<typeof OPERATION_PURPOSE_DICTIONARY, 'comparison'>
+
+type ComparisonValueType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
+/** All comparison operations and their types */
+export const COMPARISON_TYPE_DICTIONARY = {
+  EQUAL: 'primitive',
+  NOTEQUAL: 'primitive',
+  GEQ: 'numeric',
+  GREATER: 'numeric',
+  LEQ: 'numeric',
+  LESS: 'numeric',
+  IN: 'array',
+  NOTIN: 'array',
+  MATCH: 'string',
+  NOTMATCH: 'string'
+} as const satisfies Record<ComparisonOperation, ComparisonValueType>
 /** Convert an operation's comparison type to a language server type */
 export type ComparisonTypeToTSType<T extends keyof typeof COMPARISON_TYPE_DICTIONARY> = {
   primitive: Primitive
