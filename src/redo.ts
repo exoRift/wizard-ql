@@ -2,19 +2,26 @@ import { ConstraintError, ParseError } from './errors'
 import { createArrayDelimitRegexString, createQuoteRegexString, createTokenRegexString, ESCAPE_REGEX } from './regex'
 import type { Token } from './spec'
 
-type FieldType = 'boolean' | 'string' | 'number' | 'date'
-type ConditionOperatorComparisonType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
-type JunctionOperatorType = 'sumjunction' | 'productjunction'
-type OperatorType = JunctionOperatorType | ConditionOperatorComparisonType
+export type FieldType = 'boolean' | 'string' | 'number' | 'date'
+export type ConditionOperatorComparisonType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
+export type JunctionOperatorType = 'sumjunction' | 'productjunction'
+export type OperatorType = JunctionOperatorType | ConditionOperatorComparisonType
+export type FieldTypeRecord = Record<string, FieldType | FieldType[]>
+export type OperatorRecord = Record<Uppercase<string>, OperatorRecordEntry>
 
-type FieldTypeRecord = Record<string, FieldType | FieldType[]>
-type OperatorRecord = Record<Uppercase<string>, OperatorRecordEntry>
-
-interface InternalOperatorDefinition<O extends OperatorRecord> {
-  name: GetOperators<O>
-  negation: GetOperators<O>
-  type: OperatorType
+interface InternalConditionOperatorDefinition<O extends OperatorRecord> {
+  name: GetConditionOperators<O>
+  negation: GetConditionOperators<O>
+  type: ConditionOperatorComparisonType
 }
+
+interface InternalJunctionOperatorDefinition<O extends OperatorRecord> {
+  name: GetJunctionOperators<O>
+  negation: GetJunctionOperators<O>
+  type: JunctionOperatorType
+}
+
+type InternalOperatorDefinition<O extends OperatorRecord> = InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>
 
 interface OperatorRecordEntry {
   negationName: Uppercase<string>
@@ -23,7 +30,7 @@ interface OperatorRecordEntry {
   negationAliases?: ReadonlyArray<Uppercase<string>>
 }
 
-type GetConditionOperators<O extends OperatorRecord> = string & {
+export type GetConditionOperators<O extends OperatorRecord> = string & {
   [K in keyof O]: O[K] extends OperatorRecordEntry
     ? O[K] extends { type: JunctionOperatorType }
       ? never
@@ -31,7 +38,7 @@ type GetConditionOperators<O extends OperatorRecord> = string & {
     : never
 }[keyof O]
 
-type GetJunctionOperators<O extends OperatorRecord> = string & {
+export type GetJunctionOperators<O extends OperatorRecord> = string & {
   [K in keyof O]: O[K] extends OperatorRecordEntry
     ? O[K] extends { type: JunctionOperatorType }
       ? K | O[K]['negationName']
@@ -39,27 +46,27 @@ type GetJunctionOperators<O extends OperatorRecord> = string & {
     : never
 }[keyof O]
 
-type GetOperators<O extends OperatorRecord> = GetConditionOperators<O> | GetJunctionOperators<O>
+export type GetOperators<O extends OperatorRecord> = GetConditionOperators<O> | GetJunctionOperators<O>
 
-type GetOperatorDefinition<O extends OperatorRecord, P extends GetOperators<O>> = {
+export type GetOperatorDefinition<O extends OperatorRecord, P extends GetOperators<O>> = {
   [K in keyof O]: O[K] extends OperatorRecordEntry
-    ? K extends P | O[K]['negationName'] | (O[K]['aliases'] extends ReadonlyArray<infer A> ? A : never) | (O[K]['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
+    ? P extends K | O[K]['negationName'] | (O[K]['aliases'] extends ReadonlyArray<infer A> ? A : never) | (O[K]['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
       ? O[K]
       : never
     : never
 }[keyof O]
 
 type Unroll<T> = T extends ReadonlyArray<infer U> ? U : T
-type GetFieldTSType<T extends FieldType | FieldType[]> = {
+export type GetFieldTSType<T extends FieldType | FieldType[]> = {
   boolean: boolean
   string: string
   number: number
   date: Date
 }[Unroll<T>]
 
-type Primitive = GetFieldTSType<FieldType>
+export type Primitive = GetFieldTSType<FieldType>
 
-type GetConditionTSType<T extends ConditionOperatorComparisonType> = {
+export type GetConditionTSType<T extends ConditionOperatorComparisonType> = {
   primitive: Primitive
   boolean: boolean
   string: string
@@ -69,7 +76,7 @@ type GetConditionTSType<T extends ConditionOperatorComparisonType> = {
   array: Primitive[]
 }[T]
 
-interface CheckedCondition<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, I extends keyof F = keyof F, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
+export interface CheckedCondition<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, I extends keyof F = keyof F, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
   type: 'condition'
   operation: P
   field: I
@@ -79,7 +86,7 @@ interface CheckedCondition<F extends FieldTypeRecord = FieldTypeRecord, O extend
   validated: true
 }
 
-interface UncheckedCondition<O extends OperatorRecord = OperatorRecord, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
+export interface UncheckedCondition<O extends OperatorRecord = OperatorRecord, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
   type: 'condition'
   operation: P
   field: string
@@ -89,7 +96,7 @@ interface UncheckedCondition<O extends OperatorRecord = OperatorRecord, P extend
   validated: false
 }
 
-interface Group<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> {
+export interface Group<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> {
   type: 'group'
   operation: GetJunctionOperators<O> & string
   constituents: Array<Expression<F, O, V>>
@@ -114,13 +121,13 @@ type UncheckedConditionSpread<O extends OperatorRecord> = {
     : UncheckedCondition<O, P>
 }[GetConditionOperators<O>]
 
-type Expression<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> =
+export type Expression<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> =
   Group<F, O, V>
   | (V extends true
     ? CheckedConditionSpread<F, O>
     : CheckedConditionSpread<F, O> | UncheckedConditionSpread<O>)
 
-export const TYPE_PRIORITY = ['boolean', 'date', 'number', 'string'] as const satisfies FieldType[]
+const TYPE_PRIORITY = ['boolean', 'date', 'number', 'string'] as const satisfies FieldType[]
 
 interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean> {
   /**
@@ -240,6 +247,9 @@ type ValidateGlobalUniqueness<O extends OperatorRecord> = {
     : ValidationError<'Error: Invalid Operator Record key (is it all uppercase?)'>
 }
 
+type InternalOperationDictionary<O extends OperatorRecord> =
+  Record<GetConditionOperators<O> | GetJunctionOperators<O> | string, InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>>
+
 /**
  * A WizardQL parser instance
  */
@@ -297,7 +307,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     ['(', ')']
   ]
 
-  protected readonly OPERATION_DICTIONARY: Record<GetOperators<O>, InternalOperatorDefinition<O>> & Partial<Record<string, InternalOperatorDefinition<O>>>
+  protected readonly OPERATION_DICTIONARY: InternalOperationDictionary<O>
   // protected readonly DIALECT_DICTIONARY: Record<D, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
 
   protected readonly CONFIG: WizardParserConfig<F, O, V>
@@ -320,13 +330,12 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       if (!config.implicitCondition) {
         config.implicitCondition = {
           operator: 'EQUAL',
-          value: true
+          value: 'true'
         } as any
       }
     }
 
-    this.OPERATION_DICTIONARY = {} as any
-    this.OPERATION_DICTIONARY = {} as any
+    this.OPERATION_DICTIONARY = {} as InternalOperationDictionary<O>
     // this.DIALECT_DICTIONARY = {}
     for (const operationName in config.operators) {
       const operation = config.operators[operationName] as OperatorRecordEntry
@@ -338,7 +347,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       } as unknown as InternalOperatorDefinition<O>
       const negOpDef = {
         name: operation.negationName,
-        type: operation.type,
+        type: operation.type === 'sumjunction'
+          ? 'productjunction'
+          : operation.type === 'productjunction'
+            ? 'sumjunction'
+            : operation.type,
         negation: operationName
       } as unknown as InternalOperatorDefinition<O>
 
@@ -876,45 +889,48 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             if (expressions.length < 2) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
 
             const activeGroupOperationType = this.OPERATION_DICTIONARY[activeGroupOperation].type
+            // TODO: test this case
             if (activeGroupOperationType === op.type) throw new ParseError('Mixed two junction operators of the same precedence level. Unclear how to separate without grouping.', tokens, token, _offset + t)
 
             switch (op.type) {
               case 'productjunction': { // assume active type = sum
-                const futureSubgroup = this._parse(tokens.slice(t + 1), _offset + t)
-                if (futureSubgroup === null) throw new ParseError('Dangling junction operator', tokens, token, _offset + t)
-
-                return { // End for loop here
-                  type: 'group',
-                  operation: activeGroupOperation,
-                  constituents: [
-                    {
-                      type: 'group',
-                      operation: op.name as GetJunctionOperators<O>, // UGLY: Why do we need to do this? We already checked op.type
-                      constituents: expressions
-                    },
-                    futureSubgroup
-                  ]
-                }
-              }
-              case 'sumjunction': // assume active type = product
                 inConjunction = true
 
-                if (prior.type === 'group' && activeGroupOperationType === 'productjunction') continue
+                if (prior.type === 'group' && this.OPERATION_DICTIONARY[prior.operation].type === 'productjunction') continue
 
                 expressions.splice(-1, 1)
                 expressions.push({
                   type: 'group',
-                  operation: activeGroupOperation,
+                  operation: op.name,
                   constituents: [
                     prior
                   ]
                 })
 
                 continue
+              }
+              case 'sumjunction': // assume active type = product
+              {
+                const futureSubgroup = this._parse(tokens.slice(t + 1), _offset + t)
+                if (futureSubgroup === null) throw new ParseError('Dangling junction operator', tokens, token, _offset + t)
+
+                return {
+                  type: 'group',
+                  operation: op.name,
+                  constituents: [
+                    {
+                      type: 'group',
+                      operation: activeGroupOperation,
+                      constituents: expressions
+                    },
+                    futureSubgroup
+                  ]
+                }
+              }
             }
           }
 
-          activeGroupOperation = op.name as GetJunctionOperators<O>
+          activeGroupOperation = op.name
           // Simplification
           if (expressions.length === 1 && expressions[0]?.type === 'group' && expressions[0].operation === activeGroupOperation) {
             const exp = expressions[0]
@@ -1001,17 +1017,19 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
             ++t
 
+            if (!this.CONFIG.implicitCondition) throw new ParseError('Could not attempt a negative implicit condition as one is not defined in the config', tokens, token, _offset + t)
+
             field = {
               content: nextToken.content,
               token,
               index: _offset + t
             }
-            // TODO: get implicit from config
+
             comparisonOperation = {
-              content: 'EQUAL' as GetConditionOperators<O>
+              content: this.OPERATION_DICTIONARY[this.CONFIG.implicitCondition.operator].negation as GetConditionOperators<O>
             }
             value = {
-              content: 'false',
+              content: this.CONFIG.implicitCondition.value,
               implicit: true
             }
 

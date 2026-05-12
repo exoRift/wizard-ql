@@ -32,7 +32,7 @@ export function createTokenRegexString (keywords: string[], quotes: string[]): s
   const QUOTE_REGEX_STR = createQuoteRegexString(quotes)
 
   const tokens = keywords
-    .sort((a, b) => a.length - b.length)
+    .sort((a, b) => b.length - a.length)
     .map((alias) => {
       let isAlpha = true
       for (let c = 0; c < alias.length; ++c) {
