@@ -1,5 +1,5 @@
 import { ConstraintError, ParseError } from './errors'
-import { createArrayDelimitRegexString, createQuoteRegexString, createTokenRegexString, ESCAPE_REGEX } from './regex'
+import { createArrayDelimitRegexString, createQuoteRegexString, createTokenRegexString, ESCAPE_REGEX, isAlpha } from './regex'
 import type { Token } from './spec'
 
 export type FieldType = 'boolean' | 'string' | 'number' | 'date'
@@ -129,7 +129,7 @@ export type Expression<F extends FieldTypeRecord = FieldTypeRecord, O extends Op
 
 const TYPE_PRIORITY = ['boolean', 'date', 'number', 'string'] as const satisfies FieldType[]
 
-interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean> {
+interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean, D extends string> {
   /**
    * Restricted fields.\
    * Restrict an entire field by setting it to true.\
@@ -186,11 +186,11 @@ interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord
     value: string
   }
 
-  dialects?: Record<string, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
+  dialects?: Record<D, Record<GetOperators<O>, string>>
 }
 
 interface Context {
-  tokens: Token[]
+  tokens: readonly Token[]
   startToken: Token | undefined
   startIndex: number | undefined
   endToken?: Token | undefined
@@ -250,67 +250,136 @@ type ValidateGlobalUniqueness<O extends OperatorRecord> = {
 type InternalOperationDictionary<O extends OperatorRecord> =
   Record<GetConditionOperators<O> | GetJunctionOperators<O> | string, InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>>
 
+export interface StringifyOptions<D extends string> {
+  /**
+   * The dialect to use for expressing operations
+   */
+  dialect: D
+  /**
+   * Always surround a group with parentheses, even if unnecessary
+   * @default false
+   */
+  alwaysParenthesize?: boolean
+  /**
+   * Don't include spaces (Spaces will be included around operators that are "linguistic")
+   * @default false
+   */
+  compact?: boolean
+  /**
+   * Condense boolean values to their implicit denotations
+   * @example 'field'
+   * @example '!field'
+   * @default false
+   */
+  condenseBooleans?: boolean
+}
+
 /**
  * A WizardQL parser instance
  */
-export class WizardParser<const F extends FieldTypeRecord, const O extends OperatorRecord = typeof WizardParser.DEFAULT_OPERATORS, V extends boolean = false> {
+export class WizardParser<const F extends FieldTypeRecord, const O extends OperatorRecord = typeof WizardParser.DEFAULT_OPERATORS, const V extends boolean = false, const D extends string = keyof typeof WizardParser.DEFAULT_DIALECTS> {
   static readonly DEFAULT_OPERATORS = {
     AND: {
       negationName: 'OR',
       type: 'productjunction',
-      aliases: ['&&', '&', '^'],
-      negationAliases: ['||', '|', 'V']
+      aliases: ['&&', '&', '^', '\u2227'],
+      negationAliases: ['||', '|', 'V', '\u2228']
     },
 
     EQUAL: {
       negationName: 'NOTEQUAL',
       type: 'primitive',
       aliases: ['EQUALS', 'EQ', 'IS', '=', '=='],
-      negationAliases: ['NOTEQUALS', 'NEQ', 'ISNT', '!=', '!==']
+      negationAliases: ['NOTEQUALS', 'NEQ', 'ISNT', '!=', '!==', '\u2260']
     },
     LESS: {
       negationName: 'GEQ',
       type: 'numeric',
       aliases: ['<'],
-      negationAliases: ['>=', '=>']
+      negationAliases: ['>=', '=>', '\u2265']
     },
     GREATER: {
       negationName: 'LEQ',
       type: 'numeric',
       aliases: ['>', 'MORE', 'MORETHAN'],
-      negationAliases: ['<=', '=<']
+      negationAliases: ['<=', '=<', '\u2264']
     },
     IN: {
       negationName: 'NOTIN',
       type: 'array',
-      aliases: [':'],
-      negationAliases: ['!:']
+      aliases: [':', '\u2208'],
+      negationAliases: ['!:', '\u2209']
     },
     MATCH: {
       negationName: 'NOTMATCH',
       type: 'string',
-      aliases: ['MATCHES', '~'],
-      negationAliases: ['NOTMATCHES', '!~']
+      aliases: ['MATCHES', '~', '\u2245'],
+      negationAliases: ['NOTMATCHES', '!~', '\u2247']
     }
   } as const satisfies OperatorRecord
 
-  protected static readonly QUOTES = ['\'', '"', '`']
-  protected static readonly NEGATORS = ['!']
-  protected static readonly ARRAY_DELIMITERS = [',']
+  static readonly DEFAULT_DIALECTS = {
+    programmatic: {
+      AND: '&',
+      OR: '|',
+      EQUAL: '=',
+      NOTEQUAL: '!=',
+      GEQ: '>=',
+      GREATER: '>',
+      LEQ: '<=',
+      LESS: '<',
+      IN: ':',
+      NOTIN: '!:',
+      MATCH: '~',
+      NOTMATCH: '!~'
+    },
+    linguistic: {
+      AND: 'AND',
+      OR: 'OR',
+      EQUAL: 'EQUALS',
+      NOTEQUAL: 'NOTEQUALS',
+      GEQ: 'GEQ',
+      GREATER: 'GREATER',
+      LEQ: 'LEQ',
+      LESS: 'LESS',
+      IN: 'IN',
+      NOTIN: 'NOTIN',
+      MATCH: 'MATCHES',
+      NOTMATCH: 'NOTMATCHES'
+    },
+    formal: {
+      AND: '\u2227',
+      OR: '\u2228',
+      EQUAL: '=',
+      NOTEQUAL: '\u2260',
+      GEQ: '\u2265',
+      GREATER: '>',
+      LEQ: '\u2264',
+      LESS: '<',
+      IN: '\u2208',
+      NOTIN: '\u2209',
+      MATCH: '\u2245',
+      NOTMATCH: '\u2247'
+    }
+  } as const satisfies Record<string, Record<GetOperators<typeof this.DEFAULT_OPERATORS>, string>>
 
-  protected static readonly ARRAY_BRACKETS: Array<[open: string, close: string]> = [
+  protected static readonly QUOTES = ['\'', '"', '`'] as const
+  protected static readonly NEGATORS = ['!'] as const
+  protected static readonly ARRAY_DELIMITERS = [','] as const
+
+  protected static readonly ARRAY_BRACKETS = [
     ['[', ']'],
     ['{', '}']
-  ]
+  ] as const satisfies Array<[open: string, close: string]>
 
-  protected static readonly GROUP_PARENS: Array<[open: string, close: string]> = [
+  protected static readonly GROUP_PARENS = [
     ['(', ')']
-  ]
+  ] as const satisfies Array<[open: string, close: string]>
 
   protected readonly OPERATION_DICTIONARY: InternalOperationDictionary<O>
   // protected readonly DIALECT_DICTIONARY: Record<D, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
 
-  protected readonly CONFIG: WizardParserConfig<F, O, V>
+  protected readonly CONFIG: WizardParserConfig<F, O, V, D>
 
   protected readonly TOKEN_REGEX: RegExp
   protected readonly QUOTE_REGEX: RegExp
@@ -321,7 +390,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * Construct a WizardQL parser
    * @param config The parser configuration
    */
-  constructor (config: WizardParserConfig<F, O, V> = {}) {
+  constructor (config: WizardParserConfig<F, O, V, D> = {}) {
     this.CONFIG = config
 
     if (!config.operators) {
@@ -333,6 +402,8 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           value: 'true'
         } as any
       }
+
+      if (!config.dialects) config.dialects = WizardParser.DEFAULT_DIALECTS as any
     }
 
     this.OPERATION_DICTIONARY = {} as InternalOperationDictionary<O>
@@ -523,7 +594,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @param closing The token to consider as closing
    * @returns       The index of the closing token or -1 if not found
    */
-  protected static getClosingIndex (tokens: Token[], start: number, opening: string, closing: string): number {
+  protected static getClosingIndex (tokens: readonly Token[], start: number, opening: string, closing: string): number {
     let openingCount = 1
 
     for (let index = start + 1; index < tokens.length; ++index) {
@@ -636,7 +707,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     let validated = false
     condition.field = this.processToken(condition.field).unescaped
     const field = this.CONFIG.caseInsensitive
-      ? [...Object.keys(this.CONFIG.types ?? {}), ...Object.keys(this.CONFIG.restricted ?? {})].find((k) => k.toLowerCase() === condition.field.toLowerCase()) ?? condition.field
+      ? [...Object.keys(this.CONFIG.types ?? {}), ...Object.keys(this.CONFIG.restricted ?? {})].find((k: string) => k.toLowerCase() === condition.field.toLowerCase()) ?? condition.field
       : condition.field
     const restriction = this.CONFIG.restricted?.[field]
     const type = this.CONFIG.types?.[field]
@@ -753,7 +824,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @returns                                        An expression
    * @throws  {ParseError | ConstraintError}
    */
-  protected _parse (tokens: Token[], _offset: number): Expression<F, O, V> | null {
+  protected _parse (tokens: readonly Token[], _offset: number): Expression<F, O, V> | null {
       type TypedExpression = Expression<F, O, V>
       let field: {
         content: string
@@ -1175,5 +1246,89 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     } else tokens = this.tokenize(expression)
 
     return this._parse(tokens, 0)
+  }
+
+  /**
+   * Add quotes to a string value if it resembles another primitive
+   * @param value The value
+   * @returns     The value, possibly quoted, stringified
+   */
+  protected addQuotesIfNecessary (value: Primitive): string {
+    if (typeof value !== 'string') return value.toString()
+
+    if (value === 'true') return '"true"'
+    if (value === 'false') return '"false"'
+    if (!isNaN(Number(value))) return `"${value}"`
+
+    const escaped = value.replaceAll('\\', '\\\\')
+    if (new RegExp(this.TOKEN_REGEX, 'gi').test(escaped)) return `"${escaped.replaceAll('"', '\\"')}"`
+    return escaped
+  }
+
+  /**
+   * Convert a parsed WizardQL expression to a string
+   * @param           expression The expression
+   * @param           opts       Formatting options
+   * @throws  {Error}            If no dialect dictionary is defined or dialect supplied is unknown
+   * @returns                    The formatted string
+   */
+  stringify (
+    expression: Expression<FieldTypeRecord, O>,
+    opts: D | StringifyOptions<D>
+  ): string {
+    const {
+      dialect,
+      alwaysParenthesize = false,
+      compact = false,
+      condenseBooleans = false
+    } = (typeof opts === 'string' ? { dialect: opts } : opts)
+
+    // TODO: test this
+    if (!this.CONFIG.dialects || !(dialect in this.CONFIG.dialects)) throw new Error('No dialect dictionaries are defined in the config')
+
+    let string = ''
+    switch (expression.type) {
+      case 'group':
+        for (const constituent of expression.constituents) {
+          if (string.length) {
+            const transformed = this.CONFIG.dialects[dialect][expression.operation]
+            const alpha = isAlpha(transformed)
+
+            if (!compact || alpha) string += ' '
+            string += transformed
+            if ((!compact || alpha)) string += ' '
+          }
+
+          // TODO: parens as part of dialect
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_PARENS[0][0]
+          string += this.stringify(constituent, opts)
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_PARENS[0][1]
+        }
+
+        break
+      case 'condition':
+        if (condenseBooleans && ['EQUAL', 'NOTEQUAL'].includes(expression.operation) && typeof expression.value === 'boolean') {
+          const negative = (expression.operation === 'EQUAL' && !expression.value) || (expression.operation === 'NOTEQUAL' && expression.value)
+
+          string += `${negative ? WizardParser.NEGATORS[0] : ''}${expression.field}`
+        } else {
+          const transformed = this.CONFIG.dialects[dialect][expression.operation]
+          const alpha = isAlpha(transformed)
+
+          string += expression.field
+          if (!compact || alpha) string += ' '
+          string += transformed
+          if (!compact || alpha) string += ' '
+          if (Array.isArray(expression.value)) {
+            const join = expression.value.map((v) => this.addQuotesIfNecessary(v)).join(compact ? WizardParser.ARRAY_DELIMITERS[0] : WizardParser.ARRAY_DELIMITERS[0] + ' ')
+
+            string += `${WizardParser.ARRAY_BRACKETS[0][0]}${join}${WizardParser.ARRAY_BRACKETS[0][1]}`
+          } else string += this.addQuotesIfNecessary(expression.value)
+        }
+
+        break
+    }
+
+    return string
   }
 }

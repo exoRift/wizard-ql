@@ -7,14 +7,14 @@ const NO_ESCAPE_ERROR = new Error('Your JS runtime version does not include RegE
  * Create a Regex to look for quotes
  * @returns The regular expression
  */
-export function createQuoteRegexString (quotes: string[]): string {
+export function createQuoteRegexString (quotes: readonly string[]): string {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!RegExp.escape) throw NO_ESCAPE_ERROR
 
   return `${ESCAPE_REGEX}(?<quote>${quotes.map((q) => RegExp.escape(q)).join('|')})(?<quotecontent>.*?)${ESCAPE_REGEX}\\k<quote>`
 }
 
-export function createArrayDelimitRegexString (quotes: string[], delimiters: string[]): string {
+export function createArrayDelimitRegexString (quotes: readonly string[], delimiters: readonly string[]): string {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!RegExp.escape) throw NO_ESCAPE_ERROR
 
@@ -22,10 +22,25 @@ export function createArrayDelimitRegexString (quotes: string[], delimiters: str
 }
 
 /**
+ * Check if a string is entirely alpha characters
+ * @param text The text
+ * @returns Whether the text is solely alpha or not
+ */
+export function isAlpha (text: string): boolean {
+      for (let c = 0; c < text.length; ++c) {
+        const char = text.charCodeAt(c)
+        if (char < 65 || char > 90) return false
+      }
+
+      return true
+}
+
+/**
  * Create a Regex to find tokens
  * @returns The regular expression
+ * @throws {Error} If the runtime does not have a RegExp.escape function
  */
-export function createTokenRegexString (keywords: string[], quotes: string[]): string {
+export function createTokenRegexString (keywords: string[], quotes: readonly string[]): string {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!RegExp.escape) throw NO_ESCAPE_ERROR
 
@@ -34,18 +49,9 @@ export function createTokenRegexString (keywords: string[], quotes: string[]): s
   const tokens = keywords
     .sort((a, b) => b.length - a.length)
     .map((alias) => {
-      let isAlpha = true
-      for (let c = 0; c < alias.length; ++c) {
-        const char = alias.charCodeAt(c)
-        if (char < 65 || char > 90) {
-          isAlpha = false
-          break
-        }
-      }
-
       const escaped = RegExp.escape(alias)
 
-      return isAlpha
+      return isAlpha(alias)
         ? `(?<=${ESCAPE_REGEX}\\s|^)${escaped}(?=${ESCAPE_REGEX}\\s|$)`
         : `${ESCAPE_REGEX}${escaped}`
     })

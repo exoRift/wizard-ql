@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "custom-types": "github:exoRift/custom-types",
     "eslint": "^9.25.1",
     "eslint-config": "github:exoRift/eslint-config",
     "eslint-plugin-jsdoc": "^50.6.11"

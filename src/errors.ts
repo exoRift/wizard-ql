@@ -51,7 +51,7 @@ export class ParseError extends Error {
   /** The end token index */
   readonly endIndex: number | undefined
   /** The tokens being parsed */
-  readonly tokens: Token[] | undefined
+  readonly tokens: readonly Token[] | undefined
 
   /**
    * Construct a Parsing Error
@@ -64,7 +64,7 @@ export class ParseError extends Error {
    */
   constructor (
     message: string,
-    tokens: Token[] | undefined,
+    tokens: readonly Token[] | undefined,
     startToken: Token | undefined,
     startIndex: number | undefined,
     endToken: Token | undefined = startToken,
@@ -98,7 +98,7 @@ export class ConstraintError extends Error {
   /** The end token index */
   readonly endIndex: number | undefined
   /** The tokens being parsed */
-  readonly tokens: Token[] | undefined
+  readonly tokens: readonly Token[] | undefined
 
   /**
    * Construct a Constraint Error
@@ -111,7 +111,7 @@ export class ConstraintError extends Error {
    */
   constructor (
     message: string,
-    tokens: Token[] | undefined,
+    tokens: readonly Token[] | undefined,
     startToken: Token | undefined,
     startIndex: number | undefined,
     endToken: Token | undefined = startToken,
