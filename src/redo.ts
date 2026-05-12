@@ -13,21 +13,33 @@ interface InternalConditionOperatorDefinition<O extends OperatorRecord> {
   name: GetConditionOperators<O>
   negation: GetConditionOperators<O>
   type: ConditionOperatorComparisonType
+  exclusionary: boolean
 }
 
 interface InternalJunctionOperatorDefinition<O extends OperatorRecord> {
   name: GetJunctionOperators<O>
   negation: GetJunctionOperators<O>
   type: JunctionOperatorType
+  exclusionary: boolean
 }
 
 type InternalOperatorDefinition<O extends OperatorRecord> = InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>
 
 interface OperatorRecordEntry {
+  /** The negation of this operator */
   negationName: Uppercase<string>
+  /** The data type this operator acts upon */
   type: OperatorType
+  /** Aliases for this operator */
   aliases?: ReadonlyArray<Uppercase<string>>
+  /** Aliases for the negation of this operator */
   negationAliases?: ReadonlyArray<Uppercase<string>>
+  /**
+   * Does this operator exclude the value being provided?\
+   * The negation's exclusionary trait will be the opposite of this
+   * @default false
+   */
+  exclusionary?: boolean
 }
 
 export type GetConditionOperators<O extends OperatorRecord> = string & {
@@ -274,6 +286,15 @@ export interface StringifyOptions<D extends string> {
   condenseBooleans?: boolean
 }
 
+export interface AggregationValue<O extends OperatorRecord = OperatorRecord> {
+  /** The value being checked */
+  value: GetConditionTSType<(O[GetConditionOperators<O>] & OperatorRecordEntry & { type: ConditionOperatorComparisonType })['type']>
+  /** The operator being used */
+  operation: GetOperators<O>
+  /** Is this an exclusionary operator? (The negation of a defined operator) */
+  exclusionary: boolean
+}
+
 /**
  * A WizardQL parser instance
  */
@@ -296,13 +317,15 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       negationName: 'GEQ',
       type: 'numeric',
       aliases: ['<'],
-      negationAliases: ['>=', '=>', '\u2265']
+      negationAliases: ['>=', '=>', '\u2265'],
+      exclusionary: true
     },
     GREATER: {
       negationName: 'LEQ',
       type: 'numeric',
       aliases: ['>', 'MORE', 'MORETHAN'],
-      negationAliases: ['<=', '=<', '\u2264']
+      negationAliases: ['<=', '=<', '\u2264'],
+      exclusionary: true
     },
     IN: {
       negationName: 'NOTIN',
@@ -379,7 +402,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
   protected readonly OPERATION_DICTIONARY: InternalOperationDictionary<O>
   // protected readonly DIALECT_DICTIONARY: Record<D, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
 
-  protected readonly CONFIG: WizardParserConfig<F, O, V, D>
+  protected readonly CONFIG: WizardParserConfig<F, O, V, D> & Required<Pick<WizardParserConfig<F, O, V, D>, 'operators'>>
 
   protected readonly TOKEN_REGEX: RegExp
   protected readonly QUOTE_REGEX: RegExp
@@ -391,7 +414,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @param config The parser configuration
    */
   constructor (config: WizardParserConfig<F, O, V, D> = {}) {
-    this.CONFIG = config
+    this.CONFIG = config as any
 
     if (!config.operators) {
       config.operators = WizardParser.DEFAULT_OPERATORS as any
@@ -407,14 +430,14 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     }
 
     this.OPERATION_DICTIONARY = {} as InternalOperationDictionary<O>
-    // this.DIALECT_DICTIONARY = {}
     for (const operationName in config.operators) {
       const operation = config.operators[operationName] as OperatorRecordEntry
 
       const opDef = {
         name: operationName,
         type: operation.type,
-        negation: operation.negationName
+        negation: operation.negationName,
+        exclusionary: operation.exclusionary ?? false
       } as unknown as InternalOperatorDefinition<O>
       const negOpDef = {
         name: operation.negationName,
@@ -423,7 +446,8 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           : operation.type === 'productjunction'
             ? 'sumjunction'
             : operation.type,
-        negation: operationName
+        negation: operationName,
+        exclusionary: !operation.exclusionary
       } as unknown as InternalOperatorDefinition<O>
 
       if (operationName in this.OPERATION_DICTIONARY) throw Error(`Two operator definitions have been supplied with the same name "${operationName}"`)
@@ -446,10 +470,6 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         }
       }
     }
-
-    // TODO
-    // if (config.dialects) this.DIALECT_DICTIONARY = structuredClone(config.dialects)
-    // else this.DIALECT_DICTIONARY = {} as any
 
     this.TOKEN_REGEX = new RegExp(
       createTokenRegexString(
@@ -1330,5 +1350,53 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     }
 
     return string
+  }
+
+  /**
+   * (Get an array entry from a map or insert one) and return it
+   * @param map The map
+   * @param key The key the access
+   * @returns   The entry array
+   */
+  protected static getOrPutArrayInMap<T, U> (map: Map<T, U[]>, key: T): U[] {
+    const existingEntry = map.get(key)
+    if (existingEntry) return existingEntry
+    else {
+      const arr: U[] = []
+      map.set(key, arr)
+      return arr
+    }
+  }
+
+  /**
+   * Summarize a parsed expression by aggregating its queries by field
+   * @param expressions The expression or expressions to aggregate
+   * @returns           The aggregation as a map, mapping field name to queries
+   */
+  summarize (expressions: Expression<F, O> | Array<Expression<F, O>>): Map<string, Array<AggregationValue<O>>> {
+    const array = Array.isArray(expressions) ? expressions : [expressions]
+    const summary = new Map<string, Array<AggregationValue<O>>>()
+
+    for (const expression of array) {
+      if (expression.type === 'group') {
+        const constituents = this.summarize(expression.constituents)
+
+        for (const [field, values] of constituents.entries()) {
+          const collection = WizardParser.getOrPutArrayInMap(summary, field)
+
+          collection.push(...values)
+        }
+      } else {
+        const collection = WizardParser.getOrPutArrayInMap(summary, expression.field)
+
+        collection.push({
+          operation: expression.operation,
+          value: expression.value as AggregationValue<O>['value'],
+          exclusionary: this.OPERATION_DICTIONARY[expression.operation].exclusionary
+        })
+      }
+    }
+
+    return summary
   }
 }
