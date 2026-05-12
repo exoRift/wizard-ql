@@ -4,6 +4,7 @@ node_modules
 # output
 out
 dist
+!test/preview/dist
 *.tgz
 
 # code coverage
