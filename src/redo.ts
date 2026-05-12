@@ -168,6 +168,16 @@ interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord
   dateInterpreter?: (v: string | number) => Date
 
   operators?: (O | ValidateGlobalUniqueness<O>) & ValidateGlobalUniqueness<O>
+  /**
+   * The default operator and value (in string form) for an implicit condition (positive variant)\
+   * Example: `field` or negative: `!field`\
+   * The negative will be taken by taking the complement of the default condition\
+   * By default, this is "EQUAL true". Thus, `field` -> `field EQUAL true` and `!field` -> `field NOTEQUAL true`
+   */
+  implicitCondition?: {
+    operator: GetConditionOperators<O>
+    value: string
+  }
 
   dialects?: Record<string, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
 }
@@ -265,7 +275,16 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
   constructor (config: WizardParserConfig<F, O, V> = {}) {
     this.CONFIG = config
 
-    if (!config.operators) config.operators = WizardParser.DEFAULT_OPERATORS as any
+    if (!config.operators) {
+      config.operators = WizardParser.DEFAULT_OPERATORS as any
+
+      if (!config.implicitCondition) {
+        config.implicitCondition = {
+          operator: 'EQUAL',
+          value: true
+        } as any
+      }
+    }
 
     this.OPERATION_DICTIONARY = {} as any
     this.OPERATION_DICTIONARY = {} as any
@@ -753,15 +772,16 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         } else if (field && !comparisonOperation && !value) {
           if (!expectingExpression) throw new ParseError('Unexpected expression resolution before junctive operator', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
 
-          // TODO: allow passing of implicit operator (if required)
-          group.push(this.validateCondition({
-            type: 'condition',
-            field: field.content,
-            operation: 'EQUAL',
-            value: 'true'
-          }, true, baseCtx))
-          inConjunction = false
-          expectingExpression = false
+          if (this.CONFIG.implicitCondition) {
+            group.push(this.validateCondition({
+              type: 'condition',
+              field: field.content,
+              operation: this.CONFIG.implicitCondition.operator,
+              value: this.CONFIG.implicitCondition.value
+            }, true, baseCtx))
+            inConjunction = false
+            expectingExpression = false
+          } else throw new ParseError('Failed to resolve condition; missing operand or operator (No implicit condition is configured)', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
         } else if (field || comparisonOperation || value !== undefined) throw new ParseError('Failed to resolve condition; missing operand or operator', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
 
         field = undefined
