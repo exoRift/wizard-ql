@@ -14,6 +14,7 @@ import {
   type JunctionOperatorType,
   type OperatorRecord,
   type OperatorRecordEntry,
+  type PartType,
   type Primitive,
   type Token,
   type UncheckedCondition
@@ -287,12 +288,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     ['{', '}']
   ] as const satisfies Array<[open: string, close: string]>
 
-  protected static readonly GROUP_PARENS = [
+  protected static readonly GROUP_BRACKETS = [
     ['(', ')']
   ] as const satisfies Array<[open: string, close: string]>
 
-  protected readonly OPERATION_DICTIONARY: InternalOperationDictionary<O>
-  // protected readonly DIALECT_DICTIONARY: Record<D, Record<(keyof O | (O[keyof O] extends { negationName: infer N } ? N : never)) & string, string>>
+  protected readonly OPERATOR_DICTIONARY: InternalOperationDictionary<O>
 
   protected readonly CONFIG: WizardParserConfig<F, O, V, D> & Required<Pick<WizardParserConfig<F, O, V, D>, 'operators'>>
 
@@ -321,7 +321,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       if (!config.dialects) config.dialects = WizardParser.DEFAULT_DIALECTS as any
     }
 
-    this.OPERATION_DICTIONARY = {} as InternalOperationDictionary<O>
+    this.OPERATOR_DICTIONARY = {} as InternalOperationDictionary<O>
     for (const operationName in config.operators) {
       const operation = config.operators[operationName] as OperatorRecordEntry
 
@@ -342,31 +342,31 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         exclusionary: !operation.exclusionary
       } as unknown as InternalOperatorDefinition<O>
 
-      if (operationName in this.OPERATION_DICTIONARY) throw Error(`Two operator definitions have been supplied with the same name "${operationName}"`)
-      this.OPERATION_DICTIONARY[opDef.name] = opDef
+      if (operationName in this.OPERATOR_DICTIONARY) throw Error(`Two operator definitions have been supplied with the same name "${operationName}"`)
+      this.OPERATOR_DICTIONARY[opDef.name] = opDef
 
-      if (operation.negationName in this.OPERATION_DICTIONARY) throw Error(`An operator definition shares a negation name with another operator's definition "${operation.negationName}"`)
-      this.OPERATION_DICTIONARY[negOpDef.name] = negOpDef
+      if (operation.negationName in this.OPERATOR_DICTIONARY) throw Error(`An operator definition shares a negation name with another operator's definition "${operation.negationName}"`)
+      this.OPERATOR_DICTIONARY[negOpDef.name] = negOpDef
 
       if (operation.aliases) {
         for (const alias of operation.aliases) {
-          if (alias in this.OPERATION_DICTIONARY) throw Error(`An operator definition has an alias that refers to another operator "${alias}"`)
-          this.OPERATION_DICTIONARY[alias as GetOperators<O>] = opDef
+          if (alias in this.OPERATOR_DICTIONARY) throw Error(`An operator definition has an alias that refers to another operator "${alias}"`)
+          this.OPERATOR_DICTIONARY[alias as GetOperators<O>] = opDef
         }
       }
 
       if (operation.negationAliases) {
         for (const alias of operation.negationAliases) {
-          if (alias in this.OPERATION_DICTIONARY) throw Error(`An operator definition has a negation alias that refers to another operator "${alias}"`)
-          this.OPERATION_DICTIONARY[alias as GetOperators<O>] = negOpDef
+          if (alias in this.OPERATOR_DICTIONARY) throw Error(`An operator definition has a negation alias that refers to another operator "${alias}"`)
+          this.OPERATOR_DICTIONARY[alias as GetOperators<O>] = negOpDef
         }
       }
     }
 
     this.TOKEN_REGEX = new RegExp(
       createTokenRegexString(
-        Object.keys(this.OPERATION_DICTIONARY)
-          .concat(WizardParser.GROUP_PARENS.flat())
+        Object.keys(this.OPERATOR_DICTIONARY)
+          .concat(WizardParser.GROUP_BRACKETS.flat())
           .concat(WizardParser.ARRAY_BRACKETS.flat())
           .concat(WizardParser.NEGATORS)
           .concat(WizardParser.ARRAY_DELIMITERS),
@@ -547,7 +547,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @throws {Error}            If the inverse operation cannot be found
    */
   protected complementExpression (expression: Expression<F, O, V>): void {
-    const inverse = this.OPERATION_DICTIONARY[expression.operation].negation
+    const inverse = this.OPERATOR_DICTIONARY[expression.operation].negation
     if (!inverse) throw new Error(`Could not find inverse operation given operation name "${expression.operation}"`) // TODO: Should be parse error, maybe?
     expression.operation = inverse
 
@@ -625,7 +625,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
     if (this.CONFIG.disallowUnvalidated && restriction === undefined && type === undefined) throw new ConstraintError(`Unknown field "${condition.field}"`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
 
-    const operationType = this.OPERATION_DICTIONARY[condition.operation].type as ConditionOperatorComparisonType
+    const operationType = this.OPERATOR_DICTIONARY[condition.operation].type as ConditionOperatorComparisonType
     const types = type && (Array.isArray(type) ? type : [type])
 
     const processedValues = (Array.isArray(condition.value) ? condition.value : [condition.value]).map((v) => this.processToken(v))
@@ -826,10 +826,10 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       for (let t = 0; t < tokens.length; ++t) {
         const token = tokens[t]!
 
-        if (WizardParser.GROUP_PARENS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing parenthesis', tokens, token, _offset + t)
+        if (WizardParser.GROUP_BRACKETS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing parenthesis', tokens, token, _offset + t)
         if (WizardParser.ARRAY_BRACKETS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing bracket/brace', tokens, token, _offset + t)
 
-        const paren = WizardParser.GROUP_PARENS.find(([o]) => token.content === o)
+        const paren = WizardParser.GROUP_BRACKETS.find(([o]) => token.content === o)
         if (paren) {
           if (field || comparisonOperation || value) throw new ParseError('Tried to open a group during an operation', tokens, token, _offset + t)
 
@@ -852,7 +852,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           continue
         }
 
-        const op = this.OPERATION_DICTIONARY[token.content]
+        const op = this.OPERATOR_DICTIONARY[token.content]
 
         if (op?.type === 'sumjunction' || op?.type === 'productjunction') {
           resolveCondition({
@@ -870,7 +870,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           if (activeGroupOperation && activeGroupOperation !== op.name) {
             if (expressions.length < 2) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
 
-            const activeGroupOperationType = this.OPERATION_DICTIONARY[activeGroupOperation].type
+            const activeGroupOperationType = this.OPERATOR_DICTIONARY[activeGroupOperation].type
             // TODO: test this case
             if (activeGroupOperationType === op.type) throw new ParseError('Mixed two junction operators of the same precedence level. Unclear how to separate without grouping.', tokens, token, _offset + t)
 
@@ -878,7 +878,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
               case 'productjunction': { // assume active type = sum
                 inConjunction = true
 
-                if (prior.type === 'group' && this.OPERATION_DICTIONARY[prior.operation].type === 'productjunction') continue
+                if (prior.type === 'group' && this.OPERATOR_DICTIONARY[prior.operation].type === 'productjunction') continue
 
                 expressions.splice(-1, 1)
                 expressions.push({
@@ -927,7 +927,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         if (WizardParser.NEGATORS.includes(token.content)) {
           const nextToken = tokens[t + 1]
 
-          const nextParen = WizardParser.GROUP_PARENS.find(([o]) => nextToken?.content === o)
+          const nextParen = WizardParser.GROUP_BRACKETS.find(([o]) => nextToken?.content === o)
           if (nextParen) {
             resolveCondition({
               tokens,
@@ -986,7 +986,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         if (!field) {
           if (WizardParser.NEGATORS.includes(token.content)) {
             const nextToken = tokens[t + 1]
-            const equalOpType = this.OPERATION_DICTIONARY.EQUAL?.type
+            const equalOpType = this.OPERATOR_DICTIONARY.EQUAL?.type
             if (!nextToken || !equalOpType || !['primitive', 'boolean'].includes(equalOpType)) throw new ParseError('Unexpected "!"', tokens, token, _offset + t)
 
             resolveCondition({
@@ -1008,7 +1008,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             }
 
             comparisonOperation = {
-              content: this.OPERATION_DICTIONARY[this.CONFIG.implicitCondition.operator].negation as GetConditionOperators<O>
+              content: this.OPERATOR_DICTIONARY[this.CONFIG.implicitCondition.operator].negation as GetConditionOperators<O>
             }
             value = {
               content: this.CONFIG.implicitCondition.value,
@@ -1211,9 +1211,9 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           }
 
           // TODO: parens as part of dialect
-          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_PARENS[0][0]
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_BRACKETS[0][0]
           string += this.stringify(constituent, opts)
-          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_PARENS[0][1]
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_BRACKETS[0][1]
         }
 
         break
@@ -1283,11 +1283,39 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         collection.push({
           operation: expression.operation,
           value: expression.value as AggregationValue<O>['value'],
-          exclusionary: this.OPERATION_DICTIONARY[expression.operation].exclusionary
+          exclusionary: this.OPERATOR_DICTIONARY[expression.operation].exclusionary
         })
       }
     }
 
     return summary
+  }
+
+  getPartType (segment: string, activeArrayOpeningBracket?: string): PartType {
+    if (segment.match(this.QUOTE_EDGE_REGEX)) return 'quoted'
+    if (!isNaN(Number(segment))) return 'number'
+    for (const [opening, closing] of WizardParser.ARRAY_BRACKETS) {
+      if (!activeArrayOpeningBracket && segment === opening) return 'openingarraybracket'
+      else if (activeArrayOpeningBracket === opening && segment === closing) return 'closingarraybracket'
+    }
+    if (!activeArrayOpeningBracket) {
+      for (const [opening, closing] of WizardParser.GROUP_BRACKETS) {
+        if (segment === opening) return 'openinggroupbracket'
+        else if (segment === closing) return 'closinggroupbracket'
+      }
+    }
+    if (activeArrayOpeningBracket && WizardParser.ARRAY_DELIMITERS.includes(segment)) return 'arraydelimiter'
+    if (!activeArrayOpeningBracket && WizardParser.NEGATORS.includes(segment)) return 'negator'
+    if (!activeArrayOpeningBracket && segment in this.OPERATOR_DICTIONARY) {
+      const type = this.OPERATOR_DICTIONARY[segment]!.type
+      if (type === 'sumjunction' || type === 'productjunction') return 'junctionoperator'
+      else return 'conditionoperator'
+    }
+
+    return 'literal'
+  }
+
+  resolveOperatorAlias (alias: string): GetOperators<O> | undefined {
+    return this.OPERATOR_DICTIONARY[alias]?.name
   }
 }

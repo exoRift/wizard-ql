@@ -125,3 +125,5 @@ export interface Token {
   /** The index in the original expression this token originates from */
   index: number
 }
+
+export type PartType = 'literal' | 'junctionoperator' | 'conditionoperator' | 'quoted' | 'number' | 'openingarraybracket' | 'closingarraybracket' | 'arraydelimiter' | 'openinggroupbracket' | 'closinggroupbracket' | 'negator'
