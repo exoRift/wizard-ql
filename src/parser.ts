@@ -301,6 +301,8 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
   protected readonly QUOTE_EDGE_REGEX: RegExp
   protected readonly ARRAY_DELIMITER_REGEX: RegExp
 
+  protected readonly FIELD_LIST: Map<string, string>
+
   /**
    * Construct a WizardQL parser
    * @param config The parser configuration
@@ -319,6 +321,17 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       }
 
       if (!config.dialects) config.dialects = WizardParser.DEFAULT_DIALECTS as any
+    }
+
+    this.FIELD_LIST = new Map()
+    if (config.caseInsensitive) {
+      if (config.types) {
+        for (const key in config.types) this.FIELD_LIST.set(key.toLowerCase(), key)
+      }
+
+      if (config.restricted) {
+        for (const key in config.restricted) this.FIELD_LIST.set(key.toLowerCase(), key)
+      }
     }
 
     this.OPERATOR_DICTIONARY = {} as InternalOperationDictionary<O>
@@ -618,7 +631,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     let validated = false
     condition.field = this.processToken(condition.field).unescaped
     const field = this.CONFIG.caseInsensitive
-      ? [...Object.keys(this.CONFIG.types ?? {}), ...Object.keys(this.CONFIG.restricted ?? {})].find((k: string) => k.toLowerCase() === condition.field.toLowerCase()) ?? condition.field
+      ? this.FIELD_LIST.get(condition.field.toLowerCase()) ?? condition.field
       : condition.field
     const restriction = this.CONFIG.restricted?.[field]
     const type = this.CONFIG.types?.[field]
