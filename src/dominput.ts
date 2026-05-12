@@ -118,8 +118,8 @@ export function createDOMInput<const F extends FieldTypeRecord, const O extends 
 
         case 'arraydelimiter': element.toggleAttribute('data-delimiter', true); break
         case 'negator': element.toggleAttribute('data-negator', true); break
-        case 'junctionoperator':
-        case 'conditionoperator': element.setAttribute('data-operation', parser.resolveOperatorAlias(token.content)!); break
+        case 'junctionoperator': element.setAttribute('data-operator', 'junction'); break
+        case 'conditionoperator': element.setAttribute('data-operator', 'condition'); break
       }
 
       // if (token.content.match(QUOTE_EDGE_REGEX)) element.toggleAttribute('data-quoted', true)

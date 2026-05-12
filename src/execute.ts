@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
-import type { Expression } from './spec'
+import type { Expression, FieldTypeRecord } from './spec'
+import type { WizardParser } from './parser'
 
 /**
  * Execute a Wizard expression as a SQL query\
@@ -7,7 +8,7 @@ import type { Expression } from './spec'
  * @param query      The Knex query to append conditions to
  * @param expression The Wizard expression
  */
-export function executeAsKnex (query: Knex.QueryBuilder, expression: Expression): void {
+export function executeAsKnex (query: Knex.QueryBuilder, expression: Expression<FieldTypeRecord, typeof WizardParser.DEFAULT_OPERATORS>): void {
   switch (expression.type) {
     case 'group': {
       let firstHappened = false

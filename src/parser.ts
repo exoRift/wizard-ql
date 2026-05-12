@@ -1291,6 +1291,12 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     return summary
   }
 
+  /**
+   * Given an expression part, return its type
+   * @param segment                   The segment/part
+   * @param activeArrayOpeningBracket If actively in an array, the opening bracket
+   * @returns                         The part type
+   */
   getPartType (segment: string, activeArrayOpeningBracket?: string): PartType {
     if (segment.match(this.QUOTE_EDGE_REGEX)) return 'quoted'
     if (!isNaN(Number(segment))) return 'number'
@@ -1315,6 +1321,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     return 'literal'
   }
 
+  /**
+   * Resolve an alias to get an operator's core name
+   * @param alias The alias
+   * @returns     The core name
+   */
   resolveOperatorAlias (alias: string): GetOperators<O> | undefined {
     return this.OPERATOR_DICTIONARY[alias]?.name
   }
