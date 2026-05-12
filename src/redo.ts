@@ -201,6 +201,45 @@ interface ProcessedToken {
   unescaped: string
 }
 
+// Helper to get all strings used in OTHER entries
+type StringsInOtherEntries<O extends OperatorRecord, CurrentK> = {
+  [K in keyof O]: K extends CurrentK ? never : AllStringsInEntry<O[K] & OperatorRecordEntry> | K
+}[keyof O]
+
+// Helper to get all strings in a single entry
+type AllStringsInEntry<E extends OperatorRecordEntry> = E extends OperatorRecordEntry
+  ? E['negationName'] | (E['aliases'] extends ReadonlyArray<infer A> ? A : never)
+      | (E['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
+  : never
+
+// Validate that a keyword is not used anywhere twice (operator, negation, alias, negation alias)
+type ValidationError<Msg extends string> = string & { __error: Msg }
+type ValidateGlobalUniqueness<O extends OperatorRecord> = {
+  [K in keyof O]: O[K] extends OperatorRecordEntry
+    ? O[K] & ({
+      negationName: O[K]['negationName'] extends (K | StringsInOtherEntries<O, K>)
+        ? ValidationError<`Error: '${O[K]['negationName'] & string}' is already used as a Key or in another entry (or not all uppercase)`>
+        : O[K]['negationName']
+
+      aliases?: O[K] extends (OperatorRecordEntry & { aliases: ReadonlyArray<infer A> })
+        ? {
+          [I in keyof O[K]['aliases']]: O[K]['aliases'][I] extends K | O[K]['negationName'] | StringsInOtherEntries<O, K> | Exclude<A, O[K]['aliases'][I]>
+            ? ValidationError<`Error: Alias '${O[K]['aliases'][I] & string}' is a duplicate or used elsewhere (or not all uppercase)`>
+            : O[K]['aliases'][I]
+        }
+        : never
+
+      negationAliases?: O[K] extends (OperatorRecordEntry & { negationAliases: ReadonlyArray<infer NA> })
+        ? {
+          [I in keyof O[K]['negationAliases']]: O[K]['negationAliases'][I] extends K | O[K]['negationName'] | (O[K] extends { aliases: ReadonlyArray<infer A> } ? A : never) | StringsInOtherEntries<O, K> | Exclude<NA, O[K]['negationAliases'][I]>
+            ? ValidationError<`Error: NegationAlias '${O[K]['negationAliases'][I] & string}' is a duplicate or used elsewhere (or not all uppercase)`>
+            : O[K]['negationAliases'][I]
+        }
+        : never
+    })
+    : ValidationError<'Error: Invalid Operator Record key (is it all uppercase?)'>
+}
+
 /**
  * A WizardQL parser instance
  */
@@ -721,7 +760,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       } | undefined
       let inConjunction = false
 
-      let groupOperation: GetJunctionOperators<O> | undefined
+      let activeGroupOperation: GetJunctionOperators<O> | undefined
       let expectingExpression = true
       const expressions: TypedExpression[] = []
 
@@ -806,7 +845,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           const subExpression = this._parse(tokens.slice(t, closingIndex), _offset + t)
           // Simplification
           if (subExpression) {
-            if (subExpression.type === 'group' && subExpression.operation === groupOperation) expressions.push(...subExpression.constituents)
+            if (subExpression.type === 'group' && subExpression.operation === activeGroupOperation) expressions.push(...subExpression.constituents)
             else {
               const group = getExpressionGroup({ tokens, startToken: token, startIndex: _offset + t })
               group.push(subExpression)
@@ -820,7 +859,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
         const op = this.OPERATION_DICTIONARY[token.content]
 
-        if (op?.type === 'junction') {
+        if (op?.type === 'sumjunction' || op?.type === 'productjunction') {
           resolveCondition({
             tokens,
             startToken: field?.token ?? token,
@@ -833,37 +872,39 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           if (!prior) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
 
           expectingExpression = true
-          if (groupOperation && groupOperation !== op.name) {
+          if (activeGroupOperation && activeGroupOperation !== op.name) {
             if (expressions.length < 2) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
 
-            switch (groupOperation) {
-              case 'AND': { // assume op = OR
+            const activeGroupOperationType = this.OPERATION_DICTIONARY[activeGroupOperation].type
+            if (activeGroupOperationType === op.type) throw new ParseError('Mixed two junction operators of the same precedence level. Unclear how to separate without grouping.', tokens, token, _offset + t)
+
+            switch (op.type) {
+              case 'productjunction': { // assume active type = sum
                 const futureSubgroup = this._parse(tokens.slice(t + 1), _offset + t)
                 if (futureSubgroup === null) throw new ParseError('Dangling junction operator', tokens, token, _offset + t)
 
-                // TODO: support these dynamically
                 return { // End for loop here
                   type: 'group',
-                  operation: 'OR' as GetJunctionOperators<O>,
+                  operation: activeGroupOperation,
                   constituents: [
                     {
                       type: 'group',
-                      operation: 'AND' as GetJunctionOperators<O>,
+                      operation: op.name as GetJunctionOperators<O>, // UGLY: Why do we need to do this? We already checked op.type
                       constituents: expressions
                     },
                     futureSubgroup
                   ]
                 }
               }
-              case 'OR': // assume op = AND
+              case 'sumjunction': // assume active type = product
                 inConjunction = true
 
-                if (prior.type === 'group' && prior.operation === 'AND') continue
+                if (prior.type === 'group' && activeGroupOperationType === 'productjunction') continue
 
                 expressions.splice(-1, 1)
                 expressions.push({
                   type: 'group',
-                  operation: 'AND' as GetJunctionOperators<O>,
+                  operation: activeGroupOperation,
                   constituents: [
                     prior
                   ]
@@ -873,9 +914,9 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             }
           }
 
-          groupOperation = op.name as GetJunctionOperators<O>
+          activeGroupOperation = op.name as GetJunctionOperators<O>
           // Simplification
-          if (expressions.length === 1 && expressions[0]?.type === 'group' && expressions[0].operation === groupOperation) {
+          if (expressions.length === 1 && expressions[0]?.type === 'group' && expressions[0].operation === activeGroupOperation) {
             const exp = expressions[0]
             expressions.splice(0, 1)
 
@@ -910,7 +951,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
               this.complementExpression(futureSubExpression)
 
               // Simplification
-              if (futureSubExpression.type === 'group' && futureSubExpression.operation === groupOperation) expressions.push(...futureSubExpression.constituents)
+              if (futureSubExpression.type === 'group' && futureSubExpression.operation === activeGroupOperation) expressions.push(...futureSubExpression.constituents)
               else {
                 const group = getExpressionGroup({
                   tokens,
@@ -1078,12 +1119,12 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
       if (inConjunction) throw new ParseError('Dangling junction operator', tokens, tokens.at(-1), _offset + tokens.length - 1)
 
-      if (groupOperation) {
+      if (activeGroupOperation) {
         if (expressions.length === 1) throw new ParseError('Dangling junction operator', tokens, tokens.at(-1), _offset + tokens.length - 1)
 
         return {
           type: 'group',
-          operation: groupOperation,
+          operation: activeGroupOperation,
           constituents: expressions
         }
       } else if (expressions.length > 1) throw new ParseError('Group possesses multiple conditions without disjunctive operators', tokens, tokens[0], _offset)
@@ -1117,56 +1158,4 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
     return this._parse(tokens, 0)
   }
-}
-
-const parser = new WizardParser({
-  types: {
-    foo: 'boolean'
-  },
-  disallowUnvalidated: true
-})
-
-const expr = parser.parse('foo bar')
-
-if (expr?.type === 'condition' && expr.operation === 'LESS') {
-  expr.value
-}
-
-// Helper to get all strings used in OTHER entries
-type StringsInOtherEntries<O extends OperatorRecord, CurrentK> = {
-  [K in keyof O]: K extends CurrentK ? never : AllStringsInEntry<O[K] & OperatorRecordEntry> | K
-}[keyof O]
-
-// Helper to get all strings in a single entry
-type AllStringsInEntry<E extends OperatorRecordEntry> = E extends OperatorRecordEntry
-  ? E['negationName'] | (E['aliases'] extends ReadonlyArray<infer A> ? A : never)
-      | (E['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
-  : never
-
-// Validate that a keyword is not used anywhere twice (operator, negation, alias, negation alias)
-type ValidationError<Msg extends string> = string & { __error: Msg }
-type ValidateGlobalUniqueness<O extends OperatorRecord> = {
-  [K in keyof O]: O[K] extends OperatorRecordEntry
-    ? O[K] & ({
-      negationName: O[K]['negationName'] extends (K | StringsInOtherEntries<O, K>)
-        ? ValidationError<`Error: '${O[K]['negationName'] & string}' is already used as a Key or in another entry (or not all uppercase)`>
-        : O[K]['negationName']
-
-      aliases?: O[K] extends (OperatorRecordEntry & { aliases: ReadonlyArray<infer A> })
-        ? {
-          [I in keyof O[K]['aliases']]: O[K]['aliases'][I] extends K | O[K]['negationName'] | StringsInOtherEntries<O, K> | Exclude<A, O[K]['aliases'][I]>
-            ? ValidationError<`Error: Alias '${O[K]['aliases'][I] & string}' is a duplicate or used elsewhere (or not all uppercase)`>
-            : O[K]['aliases'][I]
-        }
-        : never
-
-      negationAliases?: O[K] extends (OperatorRecordEntry & { negationAliases: ReadonlyArray<infer NA> })
-        ? {
-          [I in keyof O[K]['negationAliases']]: O[K]['negationAliases'][I] extends K | O[K]['negationName'] | (O[K] extends { aliases: ReadonlyArray<infer A> } ? A : never) | StringsInOtherEntries<O, K> | Exclude<NA, O[K]['negationAliases'][I]>
-            ? ValidationError<`Error: NegationAlias '${O[K]['negationAliases'][I] & string}' is a duplicate or used elsewhere (or not all uppercase)`>
-            : O[K]['negationAliases'][I]
-        }
-        : never
-    })
-    : ValidationError<'Error: Invalid Operator Record key (is it all uppercase?)'>
 }
