@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 
-import { WizardParser } from '../src/redo'
+import { WizardParser } from '../src/parser'
 
 test('basic stringification', () => {
   const parser = new WizardParser()

@@ -1,13 +1,23 @@
 import { ConstraintError, ParseError } from './errors'
 import { createArrayDelimitRegexString, createQuoteRegexString, createTokenRegexString, ESCAPE_REGEX, isAlpha } from './regex'
-import type { Token } from './spec'
-
-export type FieldType = 'boolean' | 'string' | 'number' | 'date'
-export type ConditionOperatorComparisonType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
-export type JunctionOperatorType = 'sumjunction' | 'productjunction'
-export type OperatorType = JunctionOperatorType | ConditionOperatorComparisonType
-export type FieldTypeRecord = Record<string, FieldType | FieldType[]>
-export type OperatorRecord = Record<Uppercase<string>, OperatorRecordEntry>
+import {
+  TYPE_PRIORITY,
+  type ConditionOperatorComparisonType,
+  type Expression,
+  type FieldType,
+  type FieldTypeRecord,
+  type GetConditionOperators,
+  type GetConditionTSType,
+  type GetJunctionOperators,
+  type GetOperators,
+  type Group,
+  type JunctionOperatorType,
+  type OperatorRecord,
+  type OperatorRecordEntry,
+  type Primitive,
+  type Token,
+  type UncheckedCondition
+} from './spec'
 
 interface InternalConditionOperatorDefinition<O extends OperatorRecord> {
   name: GetConditionOperators<O>
@@ -15,191 +25,13 @@ interface InternalConditionOperatorDefinition<O extends OperatorRecord> {
   type: ConditionOperatorComparisonType
   exclusionary: boolean
 }
-
 interface InternalJunctionOperatorDefinition<O extends OperatorRecord> {
   name: GetJunctionOperators<O>
   negation: GetJunctionOperators<O>
   type: JunctionOperatorType
   exclusionary: boolean
 }
-
 type InternalOperatorDefinition<O extends OperatorRecord> = InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>
-
-interface OperatorRecordEntry {
-  /** The negation of this operator */
-  negationName: Uppercase<string>
-  /** The data type this operator acts upon */
-  type: OperatorType
-  /** Aliases for this operator */
-  aliases?: ReadonlyArray<Uppercase<string>>
-  /** Aliases for the negation of this operator */
-  negationAliases?: ReadonlyArray<Uppercase<string>>
-  /**
-   * Does this operator exclude the value being provided?\
-   * The negation's exclusionary trait will be the opposite of this
-   * @default false
-   */
-  exclusionary?: boolean
-}
-
-export type GetConditionOperators<O extends OperatorRecord> = string & {
-  [K in keyof O]: O[K] extends OperatorRecordEntry
-    ? O[K] extends { type: JunctionOperatorType }
-      ? never
-      : K | O[K]['negationName']
-    : never
-}[keyof O]
-
-export type GetJunctionOperators<O extends OperatorRecord> = string & {
-  [K in keyof O]: O[K] extends OperatorRecordEntry
-    ? O[K] extends { type: JunctionOperatorType }
-      ? K | O[K]['negationName']
-      : never
-    : never
-}[keyof O]
-
-export type GetOperators<O extends OperatorRecord> = GetConditionOperators<O> | GetJunctionOperators<O>
-
-export type GetOperatorDefinition<O extends OperatorRecord, P extends GetOperators<O>> = {
-  [K in keyof O]: O[K] extends OperatorRecordEntry
-    ? P extends K | O[K]['negationName'] | (O[K]['aliases'] extends ReadonlyArray<infer A> ? A : never) | (O[K]['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
-      ? O[K]
-      : never
-    : never
-}[keyof O]
-
-type Unroll<T> = T extends ReadonlyArray<infer U> ? U : T
-export type GetFieldTSType<T extends FieldType | FieldType[]> = {
-  boolean: boolean
-  string: string
-  number: number
-  date: Date
-}[Unroll<T>]
-
-export type Primitive = GetFieldTSType<FieldType>
-
-export type GetConditionTSType<T extends ConditionOperatorComparisonType> = {
-  primitive: Primitive
-  boolean: boolean
-  string: string
-  number: number
-  date: Date
-  numeric: number | Date
-  array: Primitive[]
-}[T]
-
-export interface CheckedCondition<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, I extends keyof F = keyof F, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
-  type: 'condition'
-  operation: P
-  field: I
-  value: GetOperatorDefinition<O, P>['type'] extends 'array'
-    ? Array<GetFieldTSType<F[I]>>
-    : Extract<GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>, GetFieldTSType<F[I]>>
-  validated: true
-}
-
-export interface UncheckedCondition<O extends OperatorRecord = OperatorRecord, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
-  type: 'condition'
-  operation: P
-  field: string
-  value: GetOperatorDefinition<O, P>['type'] extends 'array'
-    ? Primitive[]
-    : GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>
-  validated: false
-}
-
-export interface Group<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> {
-  type: 'group'
-  operation: GetJunctionOperators<O> & string
-  constituents: Array<Expression<F, O, V>>
-}
-
-/** Create a union of conditions; an intersection of the operation type validation and constraint type validation */
-type CheckedConditionSpread<
-  F extends FieldTypeRecord,
-  O extends OperatorRecord
-> = {
-  [I in keyof F]: {
-    [P in GetConditionOperators<O>]: [CheckedCondition<F, O, I, P>['value']] extends [never]
-      ? never
-      : CheckedCondition<F, O, I, P>
-  }[GetConditionOperators<O>]
-}[keyof F]
-
-/** Create a union of conditions that are operation type validated */
-type UncheckedConditionSpread<O extends OperatorRecord> = {
-  [P in GetConditionOperators<O>]: [UncheckedCondition<O, P>['value']] extends [never]
-    ? never
-    : UncheckedCondition<O, P>
-}[GetConditionOperators<O>]
-
-export type Expression<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> =
-  Group<F, O, V>
-  | (V extends true
-    ? CheckedConditionSpread<F, O>
-    : CheckedConditionSpread<F, O> | UncheckedConditionSpread<O>)
-
-const TYPE_PRIORITY = ['boolean', 'date', 'number', 'string'] as const satisfies FieldType[]
-
-interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean, D extends string> {
-  /**
-   * Restricted fields.\
-   * Restrict an entire field by setting it to true.\
-   * Restrict an exact value by providing a string.\
-   * Restrict a pattern by providing a Regex expression.\
-   * By default allow any value and restrict a collection of values by passing ['deny', VALUES[]]\
-   * By default restrict any value and allow a collection of values by passing ['allow', VALUES[]]\
-   * If the query value is of array type, it will check all entries of the array and ensure they're all allowed.\
-   * This check runs before type coercion so the value checked will always be a string. However, quotes and escapes WILL be removed
-   */
-  restricted?: Partial<Record<keyof F | (string & {}), boolean | ['allow' | 'deny', Array<string | RegExp>]>>
-
-  /**
-   * The types of fields\
-   * Either provide the field type singularly or permit multiple types with an array of field types\
-   * A field with type 'date' will parse the value into a Date object if possible (Wizard will not attempt to do this otherwise)\
-   * Type coercion priority: boolean -> date -> number -> string
-   */
-  types?: F
-
-  /**
-   * Field names in restriction checks and type checks are case insensitive
-   * @note If enabled, all fields will be returned as their casing denoted by the types or restricted record
-   * @warn Mismatching casing between the restricted record and the type record will prioritize the restricted record
-   */
-  caseInsensitive?: boolean
-
-  /**
-   * Disallow fields that are not present in the "restricted" record or the "types" record
-   */
-  disallowUnvalidated?: V
-
-  /**
-   * Should standalone field names be parsed as EQUAL operations (Or !field as NOTEQUAL)?\
-   * These don't trigger if the operations don't exist
-   */
-  parseImplicitEqual?: boolean
-
-  /**
-   * A callback that determines how dates are interpreted\
-   * By default, uses `new Date()`
-   */
-  dateInterpreter?: (v: string | number) => Date
-
-  operators?: (O | ValidateGlobalUniqueness<O>) & ValidateGlobalUniqueness<O>
-  /**
-   * The default operator and value (in string form) for an implicit condition (positive variant)\
-   * Example: `field` or negative: `!field`\
-   * The negative will be taken by taking the complement of the default condition\
-   * By default, this is "EQUAL true". Thus, `field` -> `field EQUAL true` and `!field` -> `field NOTEQUAL true`
-   */
-  implicitCondition?: {
-    operator: GetConditionOperators<O>
-    value: string
-  }
-
-  dialects?: Record<D, Record<GetOperators<O>, string>>
-}
 
 interface Context {
   tokens: readonly Token[]
@@ -261,6 +93,66 @@ type ValidateGlobalUniqueness<O extends OperatorRecord> = {
 
 type InternalOperationDictionary<O extends OperatorRecord> =
   Record<GetConditionOperators<O> | GetJunctionOperators<O> | string, InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>>
+
+export interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean, D extends string> {
+  /**
+   * Restricted fields.\
+   * Restrict an entire field by setting it to true.\
+   * Restrict an exact value by providing a string.\
+   * Restrict a pattern by providing a Regex expression.\
+   * By default allow any value and restrict a collection of values by passing ['deny', VALUES[]]\
+   * By default restrict any value and allow a collection of values by passing ['allow', VALUES[]]\
+   * If the query value is of array type, it will check all entries of the array and ensure they're all allowed.\
+   * This check runs before type coercion so the value checked will always be a string. However, quotes and escapes WILL be removed
+   */
+  restricted?: Partial<Record<keyof F | (string & {}), boolean | ['allow' | 'deny', Array<string | RegExp>]>>
+
+  /**
+   * The types of fields\
+   * Either provide the field type singularly or permit multiple types with an array of field types\
+   * A field with type 'date' will parse the value into a Date object if possible (Wizard will not attempt to do this otherwise)\
+   * Type coercion priority: boolean -> date -> number -> string
+   */
+  types?: F
+
+  /**
+   * Field names in restriction checks and type checks are case insensitive
+   * @note If enabled, all fields will be returned as their casing denoted by the types or restricted record
+   * @warn Mismatching casing between the restricted record and the type record will prioritize the restricted record
+   */
+  caseInsensitive?: boolean
+
+  /**
+   * Disallow fields that are not present in the "restricted" record or the "types" record
+   */
+  disallowUnvalidated?: V
+
+  /**
+   * Should standalone field names be parsed as EQUAL operations (Or !field as NOTEQUAL)?\
+   * These don't trigger if the operations don't exist
+   */
+  parseImplicitEqual?: boolean
+
+  /**
+   * A callback that determines how dates are interpreted\
+   * By default, uses `new Date()`
+   */
+  dateInterpreter?: (v: string | number) => Date
+
+  operators?: (O | ValidateGlobalUniqueness<O>) & ValidateGlobalUniqueness<O>
+  /**
+   * The default operator and value (in string form) for an implicit condition (positive variant)\
+   * Example: `field` or negative: `!field`\
+   * The negative will be taken by taking the complement of the default condition\
+   * By default, this is "EQUAL true". Thus, `field` -> `field EQUAL true` and `!field` -> `field NOTEQUAL true`
+   */
+  implicitCondition?: {
+    operator: GetConditionOperators<O>
+    value: string
+  }
+
+  dialects?: Record<D, Record<GetOperators<O>, string>>
+}
 
 export interface StringifyOptions<D extends string> {
   /**
@@ -716,7 +608,6 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
   /**
    * Validate that a condition meets constraints
    * @warn This operation mutates the condition to apply the validated field and perform type coercion
-   * @template T A type record, mapping field names to their types
    * @param                     condition       The condition to validate
    * @param                     valueIsImplicit Was this value implicitly inferred? If so, don't attempt stringification
    * @param                     ctx             Error Context

@@ -5,7 +5,9 @@ const NO_ESCAPE_ERROR = new Error('Your JS runtime version does not include RegE
 
 /**
  * Create a Regex to look for quotes
- * @returns The regular expression
+ * @param           quotes Characters to consider quotes
+ * @throws  {Error}        If the runtime does not have a RegExp.escape function
+ * @returns                The regular expression string
  */
 export function createQuoteRegexString (quotes: readonly string[]): string {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
@@ -14,6 +16,13 @@ export function createQuoteRegexString (quotes: readonly string[]): string {
   return `${ESCAPE_REGEX}(?<quote>${quotes.map((q) => RegExp.escape(q)).join('|')})(?<quotecontent>.*?)${ESCAPE_REGEX}\\k<quote>`
 }
 
+/**
+ * Create a Regex to look for array delimiting
+ * @param           quotes     Characters to consider quotes
+ * @param           delimiters Characters to consider array delimiters
+ * @throws  {Error}            If the runtime does not have a RegExp.escape function
+ * @returns                    The regular expression string
+ */
 export function createArrayDelimitRegexString (quotes: readonly string[], delimiters: readonly string[]): string {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!RegExp.escape) throw NO_ESCAPE_ERROR
@@ -24,21 +33,23 @@ export function createArrayDelimitRegexString (quotes: readonly string[], delimi
 /**
  * Check if a string is entirely alpha characters
  * @param text The text
- * @returns Whether the text is solely alpha or not
+ * @returns    Whether the text is solely alpha or not
  */
 export function isAlpha (text: string): boolean {
-      for (let c = 0; c < text.length; ++c) {
-        const char = text.charCodeAt(c)
-        if (char < 65 || char > 90) return false
-      }
+  for (let c = 0; c < text.length; ++c) {
+    const char = text.charCodeAt(c)
+    if (char < 65 || char > 90) return false
+  }
 
-      return true
+  return true
 }
 
 /**
  * Create a Regex to find tokens
- * @returns The regular expression
- * @throws {Error} If the runtime does not have a RegExp.escape function
+ * @param           keywords Keywords to isolate
+ * @param           quotes   Characters to consider quotes
+ * @throws  {Error}          If the runtime does not have a RegExp.escape function
+ * @returns                  The regular expression string
  */
 export function createTokenRegexString (keywords: string[], quotes: readonly string[]): string {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
