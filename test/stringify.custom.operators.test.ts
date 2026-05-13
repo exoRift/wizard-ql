@@ -7,3 +7,7 @@ test.todo('custom dialects', () => {
 test.todo('dialect errors', () => {
 
 })
+
+test.todo('condense implicit', () => {
+
+})

@@ -30,6 +30,8 @@
   "scripts": {
     "build": "[ -d dist ] && rm -r dist; bun build --target=node --format=esm --packages external src/index.ts --outfile dist/index.js && tsc --project tsconfig.build.json",
     "lint": "eslint .",
+    "test:types": "tsd --files 'test/**/*.test-d.ts'",
+    "test": "bun run test:types && bun test",
     "preview": "bun run build && bunx serve ./test/preview"
   },
   "devDependencies": {
@@ -37,7 +39,8 @@
     "custom-types": "github:exoRift/custom-types",
     "eslint": "^9.25.1",
     "eslint-config": "github:exoRift/eslint-config",
-    "eslint-plugin-jsdoc": "^50.6.11"
+    "eslint-plugin-jsdoc": "^50.6.11",
+    "tsd": "^0.33.0"
   },
   "optionalDependencies": {
     "knex": "^3.1.0"

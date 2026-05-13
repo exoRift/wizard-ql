@@ -19,7 +19,7 @@
 #### WizardQL is a natural-language-like query language for constructing data queries for resources that meet conditions.
 
 ## Examples
-`parse('(rank >= 10 & role = admin) | banned')`
+`WizardParser.parse('(rank >= 10 & role = admin) | banned')`
 
 > ```js
 > {
@@ -55,7 +55,7 @@
 > }
 > ```
 
-`parse('flagged OR (name MATCHES "decorative_.*" AND !(price >= 20 AND price <= 30))')`
+`WizardParser.parse('flagged OR (name MATCHES "decorative_.*" AND !(price >= 20 AND price <= 30))')`
 
 > ```js
 > {
@@ -131,7 +131,7 @@ Simply denoting a field name (`field`) transforms it into `field = true`
 ### Group
 *A group is multiple conditions joined by a junction operator such as AND or OR.*
 `({CONDITION} [...{J_OPERATOR} {CONDITION}])`
-Groups are implicit when junction operators are used (follows PEMDAS [ANDs grouped before ORs]). Parentheses can be used to denote them explicitly.
+Groups are implicit when junction operators are used (follows PEMDAS \[ANDs grouped before ORs\]). Parentheses can be used to denote them explicitly.
 
 Groups can be nested.
 > Example: `user.activated & ((user.role = member & user.group : [abc, xyz]) | (user.role = admin & user.privileged))`
@@ -139,7 +139,7 @@ Groups can be nested.
 Groups can also be negated
 > `!(firstname = John & lastname = Doe)` &rarr; `firstname != John | lastname != Doe`
 
-## Operators
+## Default Operators
 ### Junction Operators
 <details>
 <summary>AND</summary>
@@ -243,8 +243,11 @@ Groups can also be negated
 - `!~`
 </details>
 
+## Custom Operators
+TODO: finish this
+
 ## Constraints
-The `parse` function can be passed an object containing various constraints as its second parameter
+When constructing a WizardParser (`new WizardParser()`), the constructor can be passed an object containing various constraints.
 
 ### `restricted`
 A record mapping field names to restrictions. A value of `true` totally prohibits the usage of a field.
@@ -262,12 +265,12 @@ A record mapping field names to (`boolean`, `string`, `number`, `date`). The val
 
 > Example:
 > ```js
-> parse('field1 = value', {
+> new WizardParser({
 >   types: {
 >     field1: 'string',
 >     field2: ['string', 'number']
 >   }
-> })
+> }).parse('field1 = value')
 > ```
 
 > [!NOTE]
@@ -284,11 +287,11 @@ When a field has matched either a key in `types` or a field in `restricted`, the
 
 Therefore, type inference would look something like this:
 ```js
-const parsed = parse('field = value', {
+const parsed = new WizardParser({
   types: {
     field: ['string', 'number']
   }
-})
+}).parse('field = value')
 
 if (parsed.validated) {
   switch (parsed.type) {
@@ -321,18 +324,15 @@ A callback that determines how WizardQL interprets dates. Wizard will attempt to
 By default, this is simply `(v) => new Date(v)`
 
 ## Stringification
-Parsed expressions can be converted back into strings using the `stringify` function. The stringify function comes with its own slew of options as its second parameter
+Parsed expressions can be converted back into strings using the `stringify` method. The stringify method comes with its own options as its second parameter (or it can just be a string, selecting the dialect)
 
-### `junctionNotation`
-The notation to use for junction operators
+### `dialect`
+The dialect determines how operators are stringified.
+
+Custom dialects can be supplied in the WizardParser constructor. If using the default operators, the default dialects are:
 - Programmatic: `&`
 - Linguistic: `AND`
 - Formal: `^`
-
-### `comparisonNotation`
-The notation to use for comparison operators
-- Programmatic: `=`
-- Linguistic: `EQUALS`
 
 ### `alwaysParenthesize`
 Always put parentheses around every group
@@ -340,13 +340,16 @@ Always put parentheses around every group
 ### `compact`
 Don't include spaces in the output (except for surrounding lingustic operators)
 
+# TODO: UPDATE THIS
 ### `condenseBoolean`
 `EQUAL`/`NOTEQUAL` regarding booleans will be condensed into [implicit form](#implicit-boolean)
 
-## Summarize
-You can use the `summarize` function to summarize a parsed expression, aggregated by field name across groups
+### Custom Dialects
 
-`summarize(parse('(foo in [1, 2] and (bar = 2 or baz)) V (bar !: [1, 3] and foo = 3)'))`
+## Summarize
+You can use the `summarize` method to summarize a parsed expression, aggregated by field name across groups
+
+`WizardParser.summarize(parse('(foo in [1, 2] and (bar = 2 or baz)) V (bar !: [1, 3] and foo = 3)'))`
 > ```js
 > [
 >     ['foo', [
@@ -419,3 +422,5 @@ The input itself can have the following attributes:
 - `data-error-message` - The error message
 - `data-error-start` - The starting token index for the error
 - `data-error-end` - The end token index for the error
+
+An example for styling this input can be found [here](./test/preview/index.css)
