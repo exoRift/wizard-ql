@@ -176,6 +176,13 @@ test('implicit boolean', () => {
     value: true,
     validated: false
   })
+
+  expect(() => new WizardParser({
+    implicitCondition: false
+  }).parse('foo'), 'disabled implicit condition').toThrow('Failed to resolve condition; missing operand or operator (No implicit condition is configured)')
+  expect(() => new WizardParser({
+    implicitCondition: false
+  }).parse('!foo'), 'disabled implicit condition').toThrow('Could not attempt a negative implicit condition as one is not defined in the config')
 })
 
 test('escaped parsing', () => {
@@ -274,6 +281,7 @@ test('parsing errors', () => { // AI-generated tests
   expect(() => parser.parse('field = [1, 2,')).toThrow(ParseError)
   expect(() => parser.parse('foo, bar')).toThrow(ParseError)
   expect(() => parser.parse('foo =, bar')).toThrow(ParseError)
+  expect(() => parser.parse('!')).toThrow('Unexpected "!"')
 
   // Invalid operations
   expect(() => parser.parse('field <> value')).toThrow(ParseError)

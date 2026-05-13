@@ -54,14 +54,15 @@ interface ProcessedToken {
 }
 
 // Helper to get all strings used in OTHER entries
-type StringsInOtherEntries<O extends OperatorRecord, CurrentK> = {
-  [K in keyof O]: K extends CurrentK ? never : AllStringsInEntry<O[K] & OperatorRecordEntry> | K
-}[keyof O]
+type StringsInOtherEntries<T, CurrentK> = {
+  [K in keyof T]: K extends CurrentK ? never : AllStringsInEntry<T[K]> | K
+}[keyof T]
 
 // Helper to get all strings in a single entry
-type AllStringsInEntry<E extends OperatorRecordEntry> = E extends OperatorRecordEntry
-  ? E['negationName'] | (E['aliases'] extends ReadonlyArray<infer A> ? A : never)
-      | (E['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
+type AllStringsInEntry<E> = E extends OperatorRecordEntry
+  ? E['negationName']
+    | (E['aliases'] extends ReadonlyArray<infer A> ? A : never)
+    | (E['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
   : never
 
 // Validate that a keyword is not used anywhere twice (operator, negation, alias, negation alias)
@@ -70,7 +71,7 @@ type ValidateGlobalUniqueness<O extends OperatorRecord> = {
   [K in keyof O]: O[K] extends OperatorRecordEntry
     ? O[K] & ({
       negationName: O[K]['negationName'] extends (K | StringsInOtherEntries<O, K>)
-        ? ValidationError<`Error: '${O[K]['negationName'] & string}' is already used as a Key or in another entry (or not all uppercase)`>
+        ? ValidationError<`Error: '${O[K]['negationName'] & string}' is already used as a Key or in another entry (or not all uppercase) ${(K | StringsInOtherEntries<O, K>) & string}`>
         : O[K]['negationName']
 
       aliases?: O[K] extends (OperatorRecordEntry & { aliases: ReadonlyArray<infer A> })
@@ -129,12 +130,6 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
   disallowUnvalidated?: V
 
   /**
-   * Should standalone field names be parsed as EQUAL operations (Or !field as NOTEQUAL)?\
-   * These don't trigger if the operations don't exist
-   */
-  parseImplicitEqual?: boolean
-
-  /**
    * A callback that determines how dates are interpreted\
    * By default, uses `new Date()`
    */
@@ -145,11 +140,16 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
    * The default operator and value (in string form) for an implicit condition (positive variant)\
    * Example: `field` or negative: `!field`\
    * The negative will be taken by taking the complement of the default condition\
-   * By default, this is "EQUAL true". Thus, `field` -> `field EQUAL true` and `!field` -> `field NOTEQUAL true`
+   * By default, on the default operator definition, this is "EQUAL true". Thus, `field` -> `field EQUAL true` and `!field` -> `field NOTEQUAL true`\
+   * If undefined with a custom operator definition or specified false, implicit conditions will not be parsed
    */
-  implicitCondition?: {
+  implicitCondition?: false | {
+    /** The default implicit operator */
     operator: GetConditionOperators<O>
+    /** The default implicit value in string form */
     value: string
+    /** How the value should be parsed (as a type) */
+    asType: FieldType | FieldType[]
   }
 
   dialects?: Record<D, Record<GetOperators<O>, string>>
@@ -313,10 +313,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     if (!config.operators) {
       config.operators = WizardParser.DEFAULT_OPERATORS as any
 
-      if (!config.implicitCondition) {
+      if (config.implicitCondition === undefined) {
         config.implicitCondition = {
           operator: 'EQUAL',
-          value: 'true'
+          value: 'true',
+          asType: 'boolean'
         } as any
       }
 
@@ -561,7 +562,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    */
   protected complementExpression (expression: Expression<F, O, V>): void {
     const inverse = this.OPERATOR_DICTIONARY[expression.operation].negation
-    if (!inverse) throw new Error(`Could not find inverse operation given operation name "${expression.operation}"`) // TODO: Should be parse error, maybe?
+    if (!inverse) throw new Error(`Could not find inverse operation given operation name "${expression.operation}"`)
     expression.operation = inverse
 
     if (expression.type === 'group') expression.constituents.forEach((e) => this.complementExpression(e))
@@ -701,15 +702,16 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       const v = processedValues[i]!
 
       let opTypes: FieldType[]
-      if (valueIsImplicit) opTypes = ['boolean']
-      else {
+      if (valueIsImplicit) {
+        const implicitTypes = (this.CONFIG.implicitCondition as Exclude<typeof this.CONFIG.implicitCondition, undefined | false>).asType
+        opTypes = Array.isArray(implicitTypes) ? implicitTypes : [implicitTypes]
+      } else {
         switch (operationType) {
           case 'primitive':
           case 'array':
             opTypes = ['boolean', 'number', 'string']
             if (types?.includes('date')) opTypes.push('date')
             break
-          // TODO: dbl check these
           case 'number': opTypes = ['number']; break
           case 'date': opTypes = ['date']; break
           case 'boolean': opTypes = ['boolean']; break
@@ -884,8 +886,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             if (expressions.length < 2) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
 
             const activeGroupOperationType = this.OPERATOR_DICTIONARY[activeGroupOperation].type
-            // TODO: test this case
-            if (activeGroupOperationType === op.type) throw new ParseError('Mixed two junction operators of the same precedence level. Unclear how to separate without grouping.', tokens, token, _offset + t)
+            if (activeGroupOperationType === op.type) throw new ParseError('Mixed two junction operators of the same precedence level. Unclear how to separate without grouping', tokens, token, _offset + t)
 
             switch (op.type) {
               case 'productjunction': { // assume active type = sum
@@ -998,9 +999,10 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
         if (!field) {
           if (WizardParser.NEGATORS.includes(token.content)) {
+            if (!this.CONFIG.implicitCondition) throw new ParseError('Could not attempt a negative implicit condition as one is not defined in the config', tokens, token, _offset + t)
+
             const nextToken = tokens[t + 1]
-            const equalOpType = this.OPERATOR_DICTIONARY.EQUAL?.type
-            if (!nextToken || !equalOpType || !['primitive', 'boolean'].includes(equalOpType)) throw new ParseError('Unexpected "!"', tokens, token, _offset + t)
+            if (!nextToken) throw new ParseError('Unexpected "!"', tokens, token, _offset + t)
 
             resolveCondition({
               tokens,
@@ -1011,8 +1013,6 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             })
 
             ++t
-
-            if (!this.CONFIG.implicitCondition) throw new ParseError('Could not attempt a negative implicit condition as one is not defined in the config', tokens, token, _offset + t)
 
             field = {
               content: nextToken.content,
