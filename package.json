@@ -30,7 +30,9 @@
   "scripts": {
     "build": "[ -d dist ] && rm -r dist; bun build --target=node --format=esm --packages external src/index.ts --outfile dist/index.js && tsc --project tsconfig.build.json",
     "lint": "eslint .",
+    "pretest:types": "find test -name '*.test-d.ts' -exec sed -i '' 's|// @ts-expect-error|// ts-expect-error|g' {} +",
     "test:types": "tsd --files 'test/**/*.test-d.ts'",
+    "posttest:types": "find test -name '*.test-d.ts' -exec sed -i '' 's|// ts-expect-error|// @ts-expect-error|g' {} +",
     "test": "bun run test:types && bun test",
     "preview": "bun run build && bunx serve ./test/preview"
   },

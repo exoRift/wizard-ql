@@ -66,18 +66,18 @@ type AllStringsInEntry<E> = E extends OperatorRecordEntry
   : never
 
 // Validate that a keyword is not used anywhere twice (operator, negation, alias, negation alias)
-type ValidationError<Msg extends string> = string & { __error: Msg }
+type ValidationError<Msg extends string> = string & { __error: `Error: ${Msg}` }
 type ValidateGlobalUniqueness<O extends OperatorRecord> = {
   [K in keyof O]: O[K] extends OperatorRecordEntry
     ? O[K] & ({
-      negationName: O[K]['negationName'] extends (K | StringsInOtherEntries<O, K>)
-        ? ValidationError<`Error: '${O[K]['negationName'] & string}' is already used as a Key or in another entry (or not all uppercase) ${(K | StringsInOtherEntries<O, K>) & string}`>
+      negationName: O[K]['negationName'] extends K | StringsInOtherEntries<O, K>
+        ? ValidationError<`Negation '${O[K]['negationName'] & string}' is already used as a key or in another entry (or not all uppercase) ${(K | StringsInOtherEntries<O, K>) & string}`>
         : O[K]['negationName']
 
       aliases?: O[K] extends (OperatorRecordEntry & { aliases: ReadonlyArray<infer A> })
         ? {
           [I in keyof O[K]['aliases']]: O[K]['aliases'][I] extends K | O[K]['negationName'] | StringsInOtherEntries<O, K> | Exclude<A, O[K]['aliases'][I]>
-            ? ValidationError<`Error: Alias '${O[K]['aliases'][I] & string}' is a duplicate or used elsewhere (or not all uppercase)`>
+            ? ValidationError<`Alias '${O[K]['aliases'][I] & string}' is already used as a key or in another entry (or not all uppercase) ${(K | O[K]['negationName'] | StringsInOtherEntries<O, K> | Exclude<A, O[K]['aliases'][I]>) & string}`>
             : O[K]['aliases'][I]
         }
         : never
@@ -85,12 +85,18 @@ type ValidateGlobalUniqueness<O extends OperatorRecord> = {
       negationAliases?: O[K] extends (OperatorRecordEntry & { negationAliases: ReadonlyArray<infer NA> })
         ? {
           [I in keyof O[K]['negationAliases']]: O[K]['negationAliases'][I] extends K | O[K]['negationName'] | (O[K] extends { aliases: ReadonlyArray<infer A> } ? A : never) | StringsInOtherEntries<O, K> | Exclude<NA, O[K]['negationAliases'][I]>
-            ? ValidationError<`Error: NegationAlias '${O[K]['negationAliases'][I] & string}' is a duplicate or used elsewhere (or not all uppercase)`>
+            ? ValidationError<`NegationAlias '${O[K]['negationAliases'][I] & string}' is already used as a key or in another entry (or not all uppercase) ${(K | O[K]['negationName'] | (O[K] extends { aliases: ReadonlyArray<infer A> } ? A : never) | StringsInOtherEntries<O, K> | Exclude<NA, O[K]['negationAliases'][I]>) & string}`>
             : O[K]['negationAliases'][I]
         }
         : never
     })
-    : ValidationError<'Error: Invalid Operator Record key (is it all uppercase?)'>
+    : ValidationError<`Invalid operator record key '${K & string}' (is it all uppercase?)`>
+}
+
+type ValidateUppercaseKeys<O extends OperatorRecord> = {
+  [K in keyof O]: K extends Uppercase<K & string>
+    ? O[K]
+    : ValidationError<`Operator Record contains non-uppercase key: '${K & string}'`>
 }
 
 type InternalOperationDictionary<O extends OperatorRecord> =
@@ -135,7 +141,7 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
    */
   dateInterpreter?: (v: string | number) => Date
 
-  operators?: (O | ValidateGlobalUniqueness<O>) & ValidateGlobalUniqueness<O>
+  operators?: (O | ValidateGlobalUniqueness<O> | ValidateUppercaseKeys<O>) & ValidateGlobalUniqueness<O> & ValidateUppercaseKeys<O>
   /**
    * The default operator and value (in string form) for an implicit condition (positive variant)\
    * Example: `field` or negative: `!field`\
@@ -1207,7 +1213,6 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       condenseBooleans = false
     } = (typeof opts === 'string' ? { dialect: opts } : opts)
 
-    // TODO: test this
     if (!this.CONFIG.dialects || !(dialect in this.CONFIG.dialects)) throw new Error('No dialect dictionaries are defined in the config')
 
     let string = ''

@@ -1,5 +1,5 @@
 import { test } from 'bun:test'
-import { expectType } from 'tsd'
+import { expectError, expectType } from 'tsd'
 
 import { WizardParser } from '../src'
 
@@ -137,12 +137,144 @@ test('default operators', () => {
   expectType<null | DefaultExpression>(new WizardParser().parse(''))
 })
 
-test.todo('custom operators', () => {
+test('custom operators', () => {
+  type CustomCondition = {
+    type: 'condition'
+    operation: 'FOO'
+    field: string
+    value: number | Date
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: string
+    value: number | Date
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'FOO'
+    field: string
+    value: number | Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: string
+    value: number | Date
+    validated: true
+  }
 
+  interface CustomGroup {
+    type: 'group'
+    operation: 'LOREM' | 'IPSUM'
+    constituents: Array<CustomCondition | CustomGroup>
+  }
+
+  type CustomExpression = CustomCondition | CustomGroup
+
+  const parser = new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        type: 'sumjunction',
+        negationName: 'IPSUM'
+      }
+    }
+  })
+
+  expectType<CustomExpression | null>(parser.parse(''))
 })
 
-test.todo('operator failures', () => {
+test('operator definition failures', () => {
+  expectError(new WizardParser({
+    operators: {
+      FOO: {
+        // @ts-expect-error
+        negationName: 'FOO',
+        type: 'numeric'
+      },
+      LOREM: {
+        type: 'sumjunction',
+        negationName: 'IPSUM'
+      }
+    }
+  }))
 
+  expectError(new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        type: 'sumjunction',
+        // @ts-expect-error
+        negationName: 'FOO'
+      }
+    }
+  }))
+
+  expectError(new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        type: 'sumjunction',
+        negationName: 'IPSUM',
+        // @ts-expect-error
+        aliases: ['FOO']
+      }
+    }
+  }))
+
+  expectError(new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        type: 'sumjunction',
+        negationName: 'IPSUM',
+        // @ts-expect-error
+        negationAliases: ['FOOBAR', 'FOO']
+      }
+    }
+  }))
+
+  expectError(new WizardParser({
+    operators: {
+      // @ts-expect-error
+      notlowercase: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        type: 'sumjunction',
+        negationName: 'IPSUM'
+      }
+    }
+  }))
+
+  expectError(new WizardParser({
+    operators: {
+      FOO: {
+        // @ts-expect-error
+        negationName: 'notlowercase',
+        type: 'numeric'
+      },
+      LOREM: {
+        // @ts-expect-error
+        negationName: 'IPSUM',
+        type: 'sumjunction'
+      }
+    }
+  }))
 })
 
 test.todo('custom field types', () => {
