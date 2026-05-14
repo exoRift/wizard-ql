@@ -140,6 +140,11 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
    * By default, uses `new Date()`
    */
   dateInterpreter?: (v: string | number) => Date
+  /**
+   * A callback that determines how dates are stringified\
+   * By default, uses `.toISOString()`
+   */
+  dateSerializer?: (v: Date) => string
 
   operators?: (O | ValidateGlobalUniqueness<O> | ValidateUppercaseKeys<O>) & ValidateGlobalUniqueness<O> & ValidateUppercaseKeys<O>
   /**
@@ -1185,6 +1190,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @returns     The value, possibly quoted, stringified
    */
   protected addQuotesIfNecessary (value: Primitive): string {
+    if (value instanceof Date) {
+      return this.CONFIG.dateSerializer
+        ? this.CONFIG.dateSerializer(value)
+        : value.toISOString()
+    }
     if (typeof value !== 'string') return value.toString()
 
     if (value === 'true') return '"true"'

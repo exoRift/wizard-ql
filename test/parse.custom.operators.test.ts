@@ -189,3 +189,18 @@ test('mixed product junction operators', () => {
     ]
   })
 })
+
+test('mismatched implicit type', () => {
+  const parser = new WizardParser({
+    implicitCondition: {
+      operator: 'LESS',
+      value: '0',
+      asType: 'number'
+    },
+    types: {
+      stringfield: 'string'
+    }
+  })
+
+  expect(() => parser.parse('stringfield')).toThrow(ConstraintError)
+})

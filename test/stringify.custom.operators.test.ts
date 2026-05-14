@@ -1,8 +1,40 @@
 import { expect, test } from 'bun:test'
 import { WizardParser } from '../src'
 
-test.todo('custom dialects', () => {
+test('custom dialects', () => {
+  const parser = new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'number',
+        exclusionary: true
+      },
+      EQUAL: {
+        negationName: 'NOTEQUAL',
+        type: 'date',
+        aliases: ['=']
+      },
+      LOREM: {
+        negationName: 'IPSUM',
+        type: 'productjunction'
+      }
+    },
+    dialects: {
+      animals: {
+        BAR: 'cat',
+        EQUAL: 'DOG',
+        FOO: 'horSE',
+        IPSUM: '||',
+        LOREM: 'goose',
+        NOTEQUAL: 'goat'
+      }
+    }
+  })
 
+  const parsed = parser.parse('field1 foo 123 lorem field2 bar 321 ipsum field3 = 2026-05-14')
+  if (!parsed) throw new Error('Unexpected null')
+
+  expect(parser.stringify(parsed, { dialect: 'animals', compact: true }), 'custom dialect').toBe('field1 horSE 123 goose field2 cat 321||field3 DOG 2026-05-14T00:00:00.000Z')
 })
 
 test('dialect errors', () => {
@@ -44,9 +76,6 @@ test('condense implicit w/ non-boolean value', () => {
       operator: 'LESS',
       value: '0',
       asType: 'number'
-    },
-    types: {
-      stringfield: 'string'
     }
   })
 

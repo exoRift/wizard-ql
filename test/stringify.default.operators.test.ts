@@ -103,3 +103,17 @@ test('custom dialects', () => {
 
   expect(parser.stringify(parsed, { dialect: 'piglatin', compact: true })).toBe('field1 hmatcay foo\\/field2 slesay 123 DANAY field1 LEQuay true')
 })
+
+test('custom date serialization', () => {
+  const parser = new WizardParser({
+    types: {
+      datefield: 'date'
+    },
+    dateSerializer: (d) => d.getTime().toString()
+  })
+
+  const parsed = parser.parse('datefield > 2026-05-14')
+  if (!parsed) throw new Error('Unexpected null')
+
+  expect(parser.stringify(parsed, 'programmatic'), 'date rep').toBe('datefield > 1778716800000')
+})
