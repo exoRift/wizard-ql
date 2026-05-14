@@ -38,7 +38,11 @@ export function createArrayDelimitRegexString (quotes: readonly string[], delimi
 export function isAlpha (text: string): boolean {
   for (let c = 0; c < text.length; ++c) {
     const char = text.charCodeAt(c)
-    if (char < 65 || char > 90) return false
+
+    const isUpper = char >= 65 && char <= 90
+    const isLower = char >= 97 && char <= 122
+
+    if (!isUpper && !isLower) return false
   }
 
   return true

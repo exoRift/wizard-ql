@@ -177,12 +177,13 @@ export interface StringifyOptions<D extends string> {
    */
   compact?: boolean
   /**
-   * Condense boolean values to their implicit denotations
+   * Condense implicit-able value conditions to their implicit denotations\
+   * With the default operator definitions, this is booleans
    * @example 'field'
    * @example '!field'
    * @default false
    */
-  condenseBooleans?: boolean
+  condenseImplicit?: boolean
 }
 
 export interface AggregationValue<O extends OperatorRecord = OperatorRecord> {
@@ -197,7 +198,7 @@ export interface AggregationValue<O extends OperatorRecord = OperatorRecord> {
 /**
  * A WizardQL parser instance
  */
-export class WizardParser<const F extends FieldTypeRecord, const O extends OperatorRecord = typeof WizardParser.DEFAULT_OPERATORS, const V extends boolean = false, const D extends string = keyof typeof WizardParser.DEFAULT_DIALECTS> {
+export class WizardParser<const F extends FieldTypeRecord, const O extends OperatorRecord = typeof WizardParser.DEFAULT_OPERATORS, const V extends boolean = false, const D extends string = typeof WizardParser.DEFAULT_OPERATORS extends O ? keyof typeof WizardParser.DEFAULT_DIALECTS : string> {
   static readonly DEFAULT_OPERATORS = {
     AND: {
       negationName: 'OR',
@@ -641,12 +642,12 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       ? this.FIELD_LIST.get(condition.field.toLowerCase()) ?? condition.field
       : condition.field
     const restriction = this.CONFIG.restricted?.[field]
-    const type = this.CONFIG.types?.[field]
+    const fieldType = this.CONFIG.types?.[field]
 
-    if (this.CONFIG.disallowUnvalidated && restriction === undefined && type === undefined) throw new ConstraintError(`Unknown field "${condition.field}"`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+    if (this.CONFIG.disallowUnvalidated && restriction === undefined && fieldType === undefined) throw new ConstraintError(`Unknown field "${condition.field}"`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
 
+    const fieldTypes = fieldType && (Array.isArray(fieldType) ? fieldType : [fieldType])
     const operationType = this.OPERATOR_DICTIONARY[condition.operation].type as ConditionOperatorComparisonType
-    const types = type && (Array.isArray(type) ? type : [type])
 
     const processedValues = (Array.isArray(condition.value) ? condition.value : [condition.value]).map((v) => this.processToken(v))
 
@@ -716,31 +717,31 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           case 'primitive':
           case 'array':
             opTypes = ['boolean', 'number', 'string']
-            if (types?.includes('date')) opTypes.push('date')
+            if (fieldTypes?.includes('date')) opTypes.push('date')
             break
           case 'number': opTypes = ['number']; break
           case 'date': opTypes = ['date']; break
           case 'boolean': opTypes = ['boolean']; break
           case 'numeric':
             opTypes = ['number']
-            if (types?.includes('date')) opTypes.push('date')
+            if (fieldTypes?.includes('date')) opTypes.push('date')
             break
           case 'string': opTypes = ['string']; break
         }
       }
 
       try {
-        const value = this.coerceType(v, types ?? opTypes, opTypes)
+        const value = this.coerceType(v, fieldTypes ?? opTypes, opTypes)
         if (Array.isArray(condition.value)) (condition.value[i] as Primitive) = value
         else (condition.value as Primitive) = value
       } catch (err) {
         switch ((err as Error).message) {
           case 'operator': throw new ConstraintError(`Value "${condition.value.toString()}" not allowed for operation "${condition.operation}" which only allows for "${operationType}" type`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
-          case 'field': throw new ConstraintError(`Value "${condition.value.toString()}" includes a type not permitted for field "${condition.field}". Allowed types: ${(types ?? opTypes).join(', ')}`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+          case 'field': throw new ConstraintError(`Value "${condition.value.toString()}" includes a type not permitted for field "${condition.field}". Allowed types: ${(fieldTypes ?? opTypes).join(', ')}`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
         }
       }
     }
-    if (types) validated = true
+    if (fieldTypes) validated = true
 
     // Mutate
     const edit = condition as ReturnType<typeof this.validateCondition>
@@ -1210,10 +1211,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       dialect,
       alwaysParenthesize = false,
       compact = false,
-      condenseBooleans = false
+      condenseImplicit = false
     } = (typeof opts === 'string' ? { dialect: opts } : opts)
 
-    if (!this.CONFIG.dialects || !(dialect in this.CONFIG.dialects)) throw new Error('No dialect dictionaries are defined in the config')
+    if (!this.CONFIG.dialects) throw new Error('No dialect dictionaries are defined in the config')
+    if (!(dialect in this.CONFIG.dialects)) throw new Error(`Dialect '${dialect}' is not defined in the config`)
 
     let string = ''
     switch (expression.type) {
@@ -1235,13 +1237,9 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         }
 
         break
-      case 'condition':
-        if (condenseBooleans && ['EQUAL', 'NOTEQUAL'].includes(expression.operation) && typeof expression.value === 'boolean') {
-          const negative = (expression.operation === 'EQUAL' && !expression.value) || (expression.operation === 'NOTEQUAL' && expression.value)
-
-          string += `${negative ? WizardParser.NEGATORS[0] : ''}${expression.field}`
-        } else {
-          const transformed = this.CONFIG.dialects[dialect][expression.operation]
+      case 'condition': {
+        const resolveNonImplicit = (): void => {
+          const transformed = this.CONFIG.dialects![dialect][expression.operation]
           const alpha = isAlpha(transformed)
 
           string += expression.field
@@ -1255,7 +1253,29 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           } else string += this.addQuotesIfNecessary(expression.value)
         }
 
+        if (condenseImplicit && this.CONFIG.implicitCondition) {
+          const implicitOperator = this.OPERATOR_DICTIONARY[this.CONFIG.implicitCondition.operator]
+
+          let isNegation = expression.operation === implicitOperator.negation
+          if (expression.operation === implicitOperator.name || isNegation) {
+            const fieldType = this.CONFIG.types?.[expression.field]
+            const fieldTypes = fieldType && (Array.isArray(fieldType) ? fieldType : [fieldType])
+            const opTypes = Array.isArray(this.CONFIG.implicitCondition.asType) ? this.CONFIG.implicitCondition.asType : [this.CONFIG.implicitCondition.asType]
+
+            const processed = this.processToken(this.CONFIG.implicitCondition.value)
+            const coerced = this.coerceType(processed, fieldTypes ?? opTypes, opTypes)
+            const bothBoolean = (typeof coerced === 'boolean' && typeof expression.value === 'boolean')
+
+            if (coerced.valueOf() === expression.value || bothBoolean) {
+              if (bothBoolean && coerced !== expression.value) isNegation = !isNegation
+
+              string += `${isNegation ? WizardParser.NEGATORS[0] : ''}${expression.field}`
+            } else resolveNonImplicit()
+          } else resolveNonImplicit()
+        } else resolveNonImplicit()
+
         break
+      }
     }
 
     return string

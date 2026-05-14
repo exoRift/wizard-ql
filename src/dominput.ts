@@ -3,12 +3,12 @@
 
 import { WizardParser, type WizardParserConfig } from './parser'
 import { ConstraintError, ParseError } from './errors'
-import type { FieldTypeRecord, OperatorRecord, Token } from './spec'
+import type { ClassifiedToken, FieldTypeRecord, OperatorRecord } from './spec'
 
 interface DOMInputOptions<F extends FieldTypeRecord, O extends OperatorRecord, V extends boolean, D extends string> {
   input: HTMLElement
   config?: WizardParserConfig<F, O, V, D>
-  onUpdate?: (expression: ReturnType<WizardParser<F, O, V, D>['parse']> | ParseError | ConstraintError, tokens: Token[], string: string) => void
+  onUpdate?: (expression: ReturnType<WizardParser<F, O, V, D>['parse']> | ParseError | ConstraintError, tokens: ClassifiedToken[], string: string) => void
   parseOnInitialize?: boolean
 }
 
@@ -73,7 +73,7 @@ export function createDOMInput<const F extends FieldTypeRecord, const O extends 
     const text = input.textContent!.replaceAll('\n', '')
     const endPadding = input.textContent?.match(/\s*$/)?.[0].length ?? 0
 
-    const newTokens = parser.tokenize(text)
+    const newTokens = parser.tokenize(text) as ClassifiedToken[]
     const lastToken = newTokens.at(-1)
     if (lastToken && parser.resolveOperatorAlias(lastToken.content) && focused && (!endPadding && lastToken.content.match(/^[A-Za-z]+?$/))) return
 
@@ -102,9 +102,10 @@ export function createDOMInput<const F extends FieldTypeRecord, const O extends 
       const element = document.createElement('span')
       element.textContent = token.content
       element.toggleAttribute('data-node', true)
-      const part = parser.getPartType(token.content, activeArrayOpeningBracket)
+      const partType = parser.getPartType(token.content, activeArrayOpeningBracket)
+      token.partType = partType
 
-      switch (part) {
+      switch (partType) {
         case 'quoted': element.toggleAttribute('data-quoted', true); break
         case 'number': element.toggleAttribute('data-number', true); break
 

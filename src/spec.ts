@@ -127,3 +127,8 @@ export interface Token {
 }
 
 export type PartType = 'literal' | 'junctionoperator' | 'conditionoperator' | 'quoted' | 'number' | 'openingarraybracket' | 'closingarraybracket' | 'arraydelimiter' | 'openinggroupbracket' | 'closinggroupbracket' | 'negator'
+
+export interface ClassifiedToken extends Token {
+  /** The part type of the token */
+  partType: PartType
+}

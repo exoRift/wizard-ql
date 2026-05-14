@@ -34,7 +34,7 @@ test('basic stringification', () => {
 
   expect(parser.stringify(parser.parse('foo = false | foo = true | foo != false | foo != true | bar | !bar')!, {
     dialect: 'programmatic',
-    condenseBooleans: true
+    condenseImplicit: true
   }), 'condense booleans').toBe('!foo | foo | foo | !foo | bar | !bar')
 })
 
@@ -76,4 +76,30 @@ test('complex query can be reparsed', () => {
   expect(parser.parse(query2), 'q2 programmatic').toEqual(parser.parse(parser.stringify(parser.parse(query2)!, 'programmatic')))
   expect(parser.parse(query2), 'q2 linguistic').toEqual(parser.parse(parser.stringify(parser.parse(query2)!, 'linguistic')))
   expect(parser.parse(query2), 'q2 formal').toEqual(parser.parse(parser.stringify(parser.parse(query2)!, 'formal')))
+})
+
+test('custom dialects', () => {
+  const parser = new WizardParser({
+    dialects: {
+      piglatin: {
+        AND: 'DANAY',
+        EQUAL: 'LEQuay',
+        GEQ: 'qgeay',
+        GREATER: 'rgreateay',
+        IN: 'niay',
+        LEQ: 'qleay',
+        LESS: 'slesay',
+        MATCH: 'hmatcay',
+        NOTEQUAL: 'lnotequay',
+        NOTIN: 'nnotiay',
+        NOTMATCH: 'hnotmatcay',
+        OR: '\\/'
+      }
+    }
+  })
+
+  const parsed = parser.parse('field1 ~ foo or field2 < 123 & field1 = true')
+  if (!parsed) throw new Error('Unexpected null')
+
+  expect(parser.stringify(parsed, { dialect: 'piglatin', compact: true })).toBe('field1 hmatcay foo\\/field2 slesay 123 DANAY field1 LEQuay true')
 })

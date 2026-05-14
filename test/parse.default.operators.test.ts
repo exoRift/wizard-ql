@@ -1186,7 +1186,3 @@ test('type priority', () => {
     validated: true
   })
 })
-
-test.todo('custom dialects', () => {
-
-})

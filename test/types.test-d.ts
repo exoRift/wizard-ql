@@ -1,7 +1,7 @@
 import { test } from 'bun:test'
 import { expectError, expectType } from 'tsd'
 
-import { WizardParser } from '../src'
+import { WizardParser, type FieldTypeRecord } from '../src'
 
 test('default operators', () => {
   type DefaultCondition = {
@@ -420,4 +420,19 @@ test('incomplete dialects', () => {
       }
     }
   }))
+})
+
+test('no dialect autocomplete when custom operators', () => {
+  const definition = {
+    FOO: {
+      negationName: 'BAR',
+      type: 'number'
+    }
+  } as const
+
+  const parser = new WizardParser({
+    operators: definition
+  })
+
+  expectType<WizardParser<FieldTypeRecord, typeof definition, false, string>>(parser)
 })
