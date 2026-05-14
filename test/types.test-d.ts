@@ -277,10 +277,147 @@ test('operator definition failures', () => {
   }))
 })
 
-test.todo('custom field types', () => {
+test('custom field types', () => {
+  type CustomTypedCondition = {
+    type: 'condition'
+    operation: 'FOO'
+    field: string
+    value: number | Date
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: string
+    value: number | Date
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'FOO'
+    field: 'special'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: 'special'
+    value: Date
+    validated: true
+  }
 
+  interface CustomTypedGroup {
+    type: 'group'
+    operation: 'LOREM' | 'IPSUM'
+    constituents: Array<CustomTypedCondition | CustomTypedGroup>
+  }
+
+  type CustomTypedExpression = CustomTypedCondition | CustomTypedGroup
+
+  const parser = new WizardParser({
+    types: {
+      special: 'date'
+    },
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        negationName: 'IPSUM',
+        type: 'sumjunction'
+      }
+    }
+  })
+
+  expectType<CustomTypedExpression | null>(parser.parse(''))
 })
 
-test.todo('invalid dialects', () => {
+test('custom field types disallow unvalidated', () => {
+  type CustomTypedCondition = {
+    type: 'condition'
+    operation: 'FOO'
+    field: 'special'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: 'special'
+    value: Date
+    validated: true
+  }
 
+  interface CustomTypedGroup {
+    type: 'group'
+    operation: 'LOREM' | 'IPSUM'
+    constituents: Array<CustomTypedCondition | CustomTypedGroup>
+  }
+
+  type CustomTypedExpression = CustomTypedCondition | CustomTypedGroup
+
+  const parser = new WizardParser({
+    types: {
+      special: 'date'
+    },
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      LOREM: {
+        negationName: 'IPSUM',
+        type: 'sumjunction'
+      }
+    },
+    disallowUnvalidated: true
+  })
+
+  expectType<CustomTypedExpression | null>(parser.parse(''))
+})
+
+test('invalid dialects default', () => {
+  const parser = new WizardParser()
+  const parsed = parser.parse('hello')
+  if (!parsed) throw new Error('Unexpected behavior')
+
+  // @ts-expect-error
+  expectError(parser.stringify(parsed, 'foo'))
+})
+
+test('invalid dialects custom', () => {
+  const parser = new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'number'
+      }
+    },
+    dialects: {
+      foo: {
+        FOO: 'FOO',
+        BAR: 'BAR'
+      }
+    }
+  })
+  const parsed = parser.parse('hello')
+  if (!parsed) throw new Error('Unexpected behavior')
+
+  // @ts-expect-error
+  expectError(parser.stringify(parsed, 'formal'))
+})
+
+test('incomplete dialects', () => {
+  expectError(new WizardParser({
+    operators: {
+      FOO: {
+        negationName: 'BAR',
+        type: 'number'
+      }
+    },
+    dialects: {
+      // @ts-expect-error
+      foo: {
+        FOO: 'FOO'
+      }
+    }
+  }))
 })
