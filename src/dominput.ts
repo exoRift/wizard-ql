@@ -123,19 +123,6 @@ export function createDOMInput<const F extends FieldTypeRecord, const O extends 
         case 'conditionoperator': element.setAttribute('data-operator', 'condition'); break
       }
 
-      // if (token.content.match(QUOTE_EDGE_REGEX)) element.toggleAttribute('data-quoted', true)
-      // if (!isNaN(Number(token.content))) element.toggleAttribute('data-number', true)
-      // if (PARENS.concat(BRACKETS).some((entry) => entry.includes(token.content))) {
-      //   if (activeArrayOpeningBracket && BRACKETS.some(([o, c]) => (activeArrayOpeningBracket === o && token.content === c))) activeArrayOpeningBracket = undefined
-      //   if (!activeArrayOpeningBracket) element.setAttribute('data-bracket', token.content)
-      //   if (!activeArrayOpeningBracket && BRACKETS.some(([o]) => o === token.content)) activeArrayOpeningBracket = token.content
-      // }
-      // if (activeArrayOpeningBracket && ARRAY_DELIMITERS.includes(token.content)) element.toggleAttribute('data-delimiter', true)
-      // if (!activeArrayOpeningBracket && NEGATORS.includes(token.content)) element.toggleAttribute('data-negation', true)
-      // if (!activeArrayOpeningBracket && token.content in OPERATION_ALIAS_DICTIONARY) {
-      //   element.setAttribute('data-operation', OPERATION_PURPOSE_DICTIONARY[OPERATION_ALIAS_DICTIONARY[token.content as keyof typeof OPERATION_ALIAS_DICTIONARY]])
-      // }
-
       const existing = input.childNodes.item(t + offset) as ChildNode | null
       if (existing) input.replaceChild(element, existing)
       else input.appendChild(element)

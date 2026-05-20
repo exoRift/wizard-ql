@@ -16,7 +16,7 @@
   𝗟<sub>anguage</sub>
 </h2>
 
-#### WizardQL is a natural-language-like query language for constructing data queries for resources that meet conditions.
+#### WizardQL is a natural-language-like query language for constructing data queries for resources that meet conditions, fitted with extensive type completion.
 
 ## Examples
 `WizardParser.parse('(rank >= 10 & role = admin) | banned')`
@@ -128,6 +128,9 @@ Simply denoting a field name (`field`) transforms it into `field = true`
 
 (`!field`) transforms it into `field = false`
 
+> [!NOTE]
+> This is true for the default operator set. If custom operators are defined, a custom [implicit condition](#implicit-condition) can be defined as well.
+
 ### Group
 *A group is multiple conditions joined by a junction operator such as AND or OR.*
 `({CONDITION} [...{J_OPERATOR} {CONDITION}])`
@@ -159,7 +162,7 @@ Groups can also be negated
 - `V`
 </details>
 
-### Comparison Operators
+### Condition Operators
 <details>
 <summary>EQUAL</summary>
 
@@ -244,12 +247,60 @@ Groups can also be negated
 </details>
 
 ## Custom Operators
-TODO: finish this
+If the default operators don't fulfill your needs, a custom operator set can be defined.
+
+```js
+new WizardParser({
+  operators: {
+    [OPERATOR_NAME]: {
+      negationName: NEGATION_OPERATOR_NAME,
+      aliases: ['ALIAS'],
+      type: 'numeric',
+      negationAliases: ['NEGALIAS']
+    },
+    ...
+  }
+})
+```
+
+An operator is inherently two operators: the base operator and its negation. When defining an operator, you must also define its `negationName`. You can also define aliases for operators and their negations.
+
+Lastly, you must supply the data type the operator functions on. This type also determines the operator type (condition/junction \[a junction joins conditions together into a group\]).
+- For **condition operators**, `type` can be `'primitive'`, `'boolean'`, `'string'`, `'number'`, `'date'`, `'numeric'`, or `'array'`. `primitive` allows all data types (singular). `array` allows all data types within an array. `numeric` allows `number` or `date`; however, `number` will be used unless the condition's field is only of type `date`.
+- For **junction operators**, `type` can be `sumjunction` or `productjunction`. They're both group operators, but have different precedence for logical PEMDAS. For example, `A & B | C` becomes `(A & B) | C`. In logic, "and" is a product junction, and "or" is a sum junction. The negation of a sum junction is a product junction and vice-versa.
+
+When defining custom operators, their names should be all uppercase. Two operators should not share names or aliases. This applies to the keys of the operator record, `negationName`, `aliases`, and `negationAliases`.
+
+For condition operators, if, for whatever reason, you want to define the negation operators first, you can supply `exclusionary: true` which marks the operator you defined in the record as the negatory one.
+
+## Implicit Condition
+You may have noted the existed of [implicit boolean](#implicit-boolean) for the default operator set. Once you start defining custom operators, there is no longer a default implicit condition. One can optionally be defined.
+
+```js
+new WizardParser({
+  operators: {
+    [OPERATOR_NAME]: {
+      negationName: NEGATION_OPERATOR_NAME,
+      aliases: ['ALIAS'],
+      type: 'numeric',
+      negationAliases: ['NEGALIAS']
+    },
+    ...
+  },
+  implicitCondition: {
+    operator: OPERATOR_NAME, // The operator to use
+    value: '0', // The value, as a string
+    asType: 'number' // What datatype should the value be read as
+  }
+})
+```
+
+The implicit condition is applied when a field name is denoted without any operator. Example: (`field = value | otherfield`). In this case, `otherfield` would be parsed as `otherfield OPERATOR_NAME 0`. If a negator precedes the field (`!otherfield`), it uses the negated variant of the implicit operator.
 
 ## Constraints
-When constructing a WizardParser (`new WizardParser()`), the constructor can be passed an object containing various constraints.
+When constructing a WizardParser instance (`new WizardParser()`), the constructor can be passed properties containing various constraints.
 
-### `restricted`
+### Restricted Fields (`restricted`)
 A record mapping field names to restrictions. A value of `true` totally prohibits the usage of a field.
 
 Otherwise, a tuple can be passed
@@ -260,7 +311,7 @@ Values can be direct values (string, number, boolean) or regex expressions
 "allow" will allow the values/patterns and deny all others
 "deny" will deny the values/patterns and allow all others
 
-### `types`
+### Field Types (`types`)
 A record mapping field names to (`boolean`, `string`, `number`, `date`). The value in the record can either be a single allowed type or an array of allowed types. Only operators that can function on that type can be used for that field. By default, fields will be treated as being able to be any of the three types.
 
 > Example:
@@ -307,6 +358,9 @@ if (parsed.validated) {
 }
 ```
 
+### `disallowUnvalidated`
+Fields that are not present in the type or restriction record will considered invalid fields. This will make resulting parsed expression types far more usable without having to check if `validated === true`
+
 ### `caseInsensitive`
 Type/constraint checks will be case-insensitive on the field name
 > [!NOTE]
@@ -315,9 +369,6 @@ Type/constraint checks will be case-insensitive on the field name
 > [!WARNING]
 > Mismatching casing between the restricted record and the type record will prioritize the restricted record
 
-### `disallowUnvalidated`
-Fields that are not present in the type or restriction record will considered invalid fields
-
 ### `dateInterpreter`
 A callback that determines how WizardQL interprets dates. Wizard will attempt to parse a value as a date if `'date'` is supplied in its type record
 
@@ -325,6 +376,13 @@ By default, this is simply `(v) => new Date(v)`
 
 ## Stringification
 Parsed expressions can be converted back into strings using the `stringify` method. The stringify method comes with its own options as its second parameter (or it can just be a string, selecting the dialect)
+
+```js
+const parser = new WizardParser()
+
+const parsed = parser.parse('...')
+if (parsed) console.log(parser.stringify(parsed, DIALECT))
+```
 
 ### `dialect`
 The dialect determines how operators are stringified.
@@ -338,16 +396,49 @@ Custom dialects can be supplied in the WizardParser constructor. If using the de
 Always put parentheses around every group
 
 ### `compact`
-Don't include spaces in the output (except for surrounding lingustic operators)
+Don't include spaces in the output. Operators that contain alpha characters will always be surrounded with spaces.
 
-# TODO: UPDATE THIS
-### `condenseBoolean`
-`EQUAL`/`NOTEQUAL` regarding booleans will be condensed into [implicit form](#implicit-boolean)
+### `condenseImplicit`
+Conditions that are an instance of the [implicit condition](#implicit-condition) or its negation will be condensed into the implicit notation (`field`, `!field`).
+
+For example, if the default condition is `some_field LESS 0` (assuming the LESS operator is defined), `field < 0` becomes `field` and `field >= 0` becomes `!field`. There is a special exception for booleans (also utilized for the default operator [implicit boolean](#implicit-boolean)) where `field = false`, which is technically not a negation of the implicit condition (`field != true`), is still condensed to `!field`
+
+### Date Serialization
+A custom callback can be supplied to the parser constructor for how dates should be stringified. The default simply calls `Date.toISOString()`
+
+```js
+new WizardParser({
+  dateSerializer: (d) => d.getTime().toString() // Serialize to time in milliseconds instead
+})
+```
 
 ### Custom Dialects
+> See the default dialects [here](#dialect)
+
+Whether using the default operator set or custom operators (must define custom dialects for custom operators if you're looking to stringify), custom dialects can be defined. This determines how `WizardParser.stringify()` prints operator names to the resulting string.
+
+```js
+new WizardParser({
+  operators: {
+    [OPERATOR_NAME]: {
+      negationName: NEGATION_OPERATOR_NAME,
+      aliases: ['ALIAS'],
+      type: 'numeric',
+      negationAliases: ['NEGALIAS']
+    },
+    ...
+  },
+  dialects: {
+    [DIALECT_NAME]: {
+      [OPERATOR_NAME]: 'operator_denotation',
+      ...
+    }
+  }
+})
+```
 
 ## Summarize
-You can use the `summarize` method to summarize a parsed expression, aggregated by field name across groups
+You can use the `summarize` method to summarize a parsed expression, aggregated by field name across groups. This is useful for authorization checks
 
 `WizardParser.summarize(parse('(foo in [1, 2] and (bar = 2 or baz)) V (bar !: [1, 3] and foo = 3)'))`
 > ```js
@@ -387,15 +478,15 @@ You can use the `summarize` method to summarize a parsed expression, aggregated 
 > ```
 
 > [!NOTE]
-> `exclusionary` implies a negative operation (once that excludes the value)
+> `exclusionary` implies a negatory operation (one that excludes the value)
 
 ## Execution Example
-Below is an example of how a Wizard query would be executed in the context of a [KnexJS Query](https://knexjs.org/)
+Below is an example of how a Wizard query would be safely executed in the context of a [KnexJS Query](https://knexjs.org)
 
-https://github.com/guidance-analytics/wizard-ql/blob/bf8693e2cb5678ef855600d70bc495a614aa3d0b/src/execute.ts#L1-L35
+https://github.com/exoRift/wizard-ql/blob/424c92e8fc205cf22a639887ebbafd822a7c8731/src/execute.ts#L1-L36
 
 ## DOM Input
-Wizard comes pre-packaged with a DOM input that applies classes for tokens, making for query input with syntax highlighting (up to discretion)
+Wizard comes pre-packaged with a DOM input that applies classes for tokens, making for a query input with syntax highlighting (up to discretion)
 
 ```js
 // NOTE: The input element should be a regular div element, not an input element
@@ -411,10 +502,10 @@ Depending on a token's type, attributes will be applied to the contents of the i
 - `data-node` - An actual token
   - `data-quoted` - Quoted text
   - `data-number` - A number
-  - `data-bracket` - A parenthesis or array bracket
-  - `data-delimiter` - A comma
-  - `data-negation` - A negatory exclamation mark
-  - `data-operation` - A comparison or junction operator
+  - `data-bracket` - A parenthesis or array bracket (value is the bracket)
+  - `data-delimiter` - An array delimiter (comma)
+  - `data-negator` - A negation operator (exclamation mark)
+  - `data-operator` - A condition or junction operator (value will be 'junction' or 'condition')
 
 A token can also possess `data-error` if it is part of an error span
 
