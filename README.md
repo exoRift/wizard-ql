@@ -37,23 +37,23 @@
 >           field: "rank",
 >           operation: "GEQ",
 >           value: 10,
->           validated: false,
+>           validated: false
 >         }, {
 >           type: "condition",
 >           field: "role",
 >           operation: "EQUAL",
 >           value: "admin",
->           validated: false,
+>           validated: false
 >         }
->       ],
+>       ]
 >     }, {
 >       type: "condition",
 >       field: "banned",
 >       operation: "EQUAL",
 >       value: true,
->       validated: false,
+>       validated: false
 >     }
->   ],
+>   ]
 > }
 > ```
 
@@ -69,7 +69,7 @@
 >       field: "flagged",
 >       operation: "EQUAL",
 >       value: true,
->       validated: false,
+>       validated: false
 >     }, {
 >       type: "group",
 >       operation: "AND",
@@ -79,7 +79,7 @@
 >           field: "name",
 >           operation: "MATCH",
 >           value: "decorative_.*",
->           validated: false,
+>           validated: false
 >         }, {
 >           type: "group",
 >           operation: "OR",
@@ -89,19 +89,19 @@
 >               field: "price",
 >               operation: "LESS",
 >               value: 20,
->               validated: false,
+>               validated: false
 >             }, {
 >               type: "condition",
 >               field: "price",
 >               operation: "GREATER",
 >               value: 30,
->               validated: false,
+>               validated: false
 >             }
->           ],
+>           ]
 >         }
->       ],
+>       ]
 >     }
->   ],
+>   ]
 > }
 > ```
 
