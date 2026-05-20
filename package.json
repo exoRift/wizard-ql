@@ -6,7 +6,7 @@
   },
   "homepage": "https://github.com/exoRift/wizard-ql",
   "description": "WizardQL is a natural-language-like query language for constructing data queries for resources that meet conditions.",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/exoRift/wizard-ql.git"
@@ -30,11 +30,12 @@
   "scripts": {
     "build": "[ -d dist ] && rm -r dist; bun build --target=node --format=esm --packages external src/index.ts --outfile dist/index.js && tsc --project tsconfig.build.json",
     "lint": "eslint .",
-    "pretest:types": "find test -name '*.test-d.ts' -exec sed -i '' 's|// @ts-expect-error|// ts-expect-error|g' {} +",
+    "pretest:types": "bun run build && find test -name '*.test-d.ts' -exec perl -pi -e 's|// \\@ts-expect-error|// ts-expect-error|g' {} +",
     "test:types": "tsd --files 'test/**/*.test-d.ts'",
-    "posttest:types": "find test -name '*.test-d.ts' -exec sed -i '' 's|// ts-expect-error|// @ts-expect-error|g' {} +",
+    "posttest:types": "find test -name '*.test-d.ts' -exec perl -pi -e 's|// ts-expect-error|// \\@ts-expect-error|g' {} +",
     "test": "bun run test:types && bun test",
-    "preview": "bun run build && bunx serve ./test/preview"
+    "preview": "bun run build && bunx serve ./test/preview",
+    "prepack": "bun run build"
   },
   "devDependencies": {
     "@types/bun": "^1.3.13",
