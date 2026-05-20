@@ -18,6 +18,8 @@
 
 #### WizardQL is a natural-language-like query language for constructing data queries for resources that meet conditions, fitted with extensive type completion.
 
+[Demo](https://exoRift.github.io/wizard-ql)
+
 ## Examples
 `WizardParser.parse('(rank >= 10 & role = admin) | banned')`
 
