@@ -1,72 +1,123 @@
-/* eslint-disable @stylistic/quote-props */
-export const QUOTES = ['\'', '"', '`']
-export const BRACKETS: Array<[open: string, close: string]> = [
-  ['[', ']'],
-  ['{', '}']
-]
-export const PARENS: Array<[open: string, close: string]> = [
-  ['(', ')']
-]
-export const NEGATORS = ['!']
-export const ARRAY_DELIMITERS = [',']
+export type FieldType = 'boolean' | 'string' | 'number' | 'date'
+export type ConditionOperatorComparisonType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
+export type JunctionOperatorType = 'sumjunction' | 'productjunction'
+export type OperatorType = JunctionOperatorType | ConditionOperatorComparisonType
+export type FieldTypeRecord = Record<string, FieldType | FieldType[]>
 
-/** All available operation aliases (alias -> operation) */
-export const OPERATION_ALIAS_DICTIONARY = {
-  // NOTE: Longer tokens that encompass others must be first so that they are matched first in the Regex
-  'AND': 'AND',
-  '&&': 'AND',
-  '&': 'AND',
-  '^': 'AND',
+export interface OperatorRecordEntry {
+  /** The negation of this operator */
+  negationName: Uppercase<string>
+  /** The data type this operator acts upon */
+  type: OperatorType
+  /** Aliases for this operator */
+  aliases?: ReadonlyArray<Uppercase<string>>
+  /** Aliases for the negation of this operator */
+  negationAliases?: ReadonlyArray<Uppercase<string>>
+  /**
+   * Does this operator exclude the value being provided?\
+   * The negation's exclusionary trait will be the opposite of this
+   * @default false
+   */
+  exclusionary?: boolean
+}
+export type OperatorRecord = Record<Uppercase<string>, OperatorRecordEntry>
 
-  'OR': 'OR',
-  '||': 'OR',
-  '|': 'OR',
-  'V': 'OR',
+export type GetConditionOperators<O extends OperatorRecord> = string & {
+  [K in keyof O]: O[K] extends OperatorRecordEntry
+    ? O[K] extends { type: JunctionOperatorType }
+      ? never
+      : K | O[K]['negationName']
+    : never
+}[keyof O]
+export type GetJunctionOperators<O extends OperatorRecord> = string & {
+  [K in keyof O]: O[K] extends OperatorRecordEntry
+    ? O[K] extends { type: JunctionOperatorType }
+      ? K | O[K]['negationName']
+      : never
+    : never
+}[keyof O]
+export type GetOperators<O extends OperatorRecord> = GetConditionOperators<O> | GetJunctionOperators<O>
 
-  'GEQ': 'GEQ',
-  '>=': 'GEQ',
-  '=>': 'GEQ',
+export type GetOperatorDefinition<O extends OperatorRecord, P extends GetOperators<O>> = {
+  [K in keyof O]: O[K] extends OperatorRecordEntry
+    ? P extends K | O[K]['negationName'] | (O[K]['aliases'] extends ReadonlyArray<infer A> ? A : never) | (O[K]['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
+      ? O[K]
+      : never
+    : never
+}[keyof O]
 
-  'LEQ': 'LEQ',
-  '<=': 'LEQ',
-  '=<': 'LEQ',
+type Unroll<T> = T extends ReadonlyArray<infer U> ? U : T
+export type GetFieldTSType<T extends FieldType | FieldType[]> = {
+  boolean: boolean
+  string: string
+  number: number
+  date: Date
+}[Unroll<T>]
 
-  'NOTEQUALS': 'NOTEQUAL',
-  'NOTEQUAL': 'NOTEQUAL',
-  'NEQ': 'NOTEQUAL',
-  'ISNT': 'NOTEQUAL',
-  '!==': 'NOTEQUAL',
-  '!=': 'NOTEQUAL',
+export type Primitive = GetFieldTSType<FieldType>
 
-  'EQUALS': 'EQUAL',
-  'EQUAL': 'EQUAL',
-  'EQ': 'EQUAL',
-  'IS': 'EQUAL',
-  '==': 'EQUAL',
-  '=': 'EQUAL',
+export type GetConditionTSType<T extends ConditionOperatorComparisonType> = {
+  primitive: Primitive
+  boolean: boolean
+  string: string
+  number: number
+  date: Date
+  numeric: number | Date
+  array: Primitive[]
+}[T]
 
-  'LESS': 'LESS',
-  '<': 'LESS',
+export interface CheckedCondition<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, I extends keyof F = keyof F, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
+  type: 'condition'
+  operation: P
+  field: I
+  value: GetOperatorDefinition<O, P>['type'] extends 'array'
+    ? Array<GetFieldTSType<F[I]>>
+    : Extract<GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>, GetFieldTSType<F[I]>>
+  validated: true
+}
 
-  'GREATER': 'GREATER',
-  '>': 'GREATER',
-  'MORE': 'GREATER',
+export interface UncheckedCondition<O extends OperatorRecord = OperatorRecord, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
+  type: 'condition'
+  operation: P
+  field: string
+  value: GetOperatorDefinition<O, P>['type'] extends 'array'
+    ? Primitive[]
+    : GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>
+  validated: false
+}
 
-  'NOTIN': 'NOTIN',
-  '!:': 'NOTIN',
+export interface Group<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> {
+  type: 'group'
+  operation: GetJunctionOperators<O> & string
+  constituents: Array<Expression<F, O, V>>
+}
 
-  'IN': 'IN',
-  ':': 'IN',
+/** Create a union of conditions; an intersection of the operation type validation and constraint type validation */
+type CheckedConditionSpread<
+  F extends FieldTypeRecord,
+  O extends OperatorRecord
+> = {
+  [I in keyof F]: {
+    [P in GetConditionOperators<O>]: [CheckedCondition<F, O, I, P>['value']] extends [never]
+      ? never
+      : CheckedCondition<F, O, I, P>
+  }[GetConditionOperators<O>]
+}[keyof F]
 
-  'NOTMATCHES': 'NOTMATCH',
-  'NOTMATCH': 'NOTMATCH',
-  '!~': 'NOTMATCH',
+/** Create a union of conditions that are operation type validated */
+type UncheckedConditionSpread<O extends OperatorRecord> = {
+  [P in GetConditionOperators<O>]: [UncheckedCondition<O, P>['value']] extends [never]
+    ? never
+    : UncheckedCondition<O, P>
+}[GetConditionOperators<O>]
 
-  'MATCHES': 'MATCH',
-  'MATCH': 'MATCH',
-  '~': 'MATCH'
-} as const
-/* eslint-enable @stylistic/quote-props */
+export type Expression<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, V extends boolean = false> =
+  Group<F, O, V>
+  | (V extends true
+    ? CheckedConditionSpread<F, O>
+    : CheckedConditionSpread<F, O> | UncheckedConditionSpread<O>)
+
+export const TYPE_PRIORITY = ['boolean', 'date', 'number', 'string'] as const satisfies FieldType[]
 
 export interface Token {
   /** The text content of the token */
@@ -75,145 +126,9 @@ export interface Token {
   index: number
 }
 
-export type Operation = (typeof OPERATION_ALIAS_DICTIONARY)[keyof typeof OPERATION_ALIAS_DICTIONARY]
+export type PartType = 'literal' | 'junctionoperator' | 'conditionoperator' | 'quoted' | 'number' | 'openingarraybracket' | 'closingarraybracket' | 'arraydelimiter' | 'openinggroupbracket' | 'closinggroupbracket' | 'negator'
 
-export const ALIASES = Object.keys(OPERATION_ALIAS_DICTIONARY)
-
-/** All base operations and their type */
-export const OPERATION_PURPOSE_DICTIONARY = {
-  AND: 'junction',
-  OR: 'junction',
-  EQUAL: 'comparison',
-  NOTEQUAL: 'comparison',
-  LESS: 'comparison',
-  GREATER: 'comparison',
-  GEQ: 'comparison',
-  LEQ: 'comparison',
-  IN: 'comparison',
-  NOTIN: 'comparison',
-  MATCH: 'comparison',
-  NOTMATCH: 'comparison'
-} as const satisfies Record<Operation, 'junction' | 'comparison'>
-
-type KeysWhereValue<T, V> = Exclude<{
-  [K in keyof T]: T[K] extends V ? K : never
-}[keyof T], never>
-
-export type JunctionOperation = KeysWhereValue<typeof OPERATION_PURPOSE_DICTIONARY, 'junction'>
-export type ComparisonOperation = KeysWhereValue<typeof OPERATION_PURPOSE_DICTIONARY, 'comparison'>
-
-type ComparisonValueType = 'primitive' | 'boolean' | 'string' | 'number' | 'date' | 'numeric' | 'array'
-/** All comparison operations and their types */
-export const COMPARISON_TYPE_DICTIONARY = {
-  EQUAL: 'primitive',
-  NOTEQUAL: 'primitive',
-  GEQ: 'numeric',
-  GREATER: 'numeric',
-  LEQ: 'numeric',
-  LESS: 'numeric',
-  IN: 'array',
-  NOTIN: 'array',
-  MATCH: 'string',
-  NOTMATCH: 'string'
-} as const satisfies Record<ComparisonOperation, ComparisonValueType>
-/** Convert an operation's comparison type to a language server type */
-export type ComparisonTypeToTSType<T extends keyof typeof COMPARISON_TYPE_DICTIONARY> = {
-  primitive: Primitive
-  boolean: boolean
-  string: string
-  number: number
-  date: Date
-  numeric: number | Date
-  array: Primitive[]
-}[typeof COMPARISON_TYPE_DICTIONARY[T]]
-
-export type FieldType = 'boolean' | 'string' | 'number' | 'date'
-export type TypeRecord = Record<string, FieldType | FieldType[]>
-
-/** Convert a field type string to a language server type */
-export type FieldTypeToTSType<T extends FieldType> = {
-  boolean: boolean
-  string: string
-  number: number
-  date: Date
-}[T]
-/** Primitive values that can be used in comparisons */
-export type Primitive = FieldTypeToTSType<FieldType>
-/** Convert input type record to language server type record */
-export type ConvertTypeRecord<T extends TypeRecord> = {
-  [K in keyof T]: T[K] extends FieldType[]
-    ? FieldTypeToTSType<T[K][number]>
-    : T[K] extends FieldType
-      ? FieldTypeToTSType<T[K]>
-      : Primitive
+export interface ClassifiedToken extends Token {
+  /** The part type of the token */
+  partType: PartType
 }
-
-export const TYPE_PRIORITY = ['boolean', 'date', 'number', 'string'] as const satisfies FieldType[]
-
-/**
- * A group of conditions joined by a junction operator
- * @template R A record mapping field names to values
- */
-export interface Group<R extends Record<string, unknown> = Record<string, Primitive>, V extends boolean = false> {
-  type: 'group'
-  /** The junction operator */
-  operation: JunctionOperation
-  /** The members of the group */
-  constituents: Array<Expression<R, V>>
-}
-/**
- * A query on a field, validated by type constraints
- * @template R A record mapping field names to values
- * @template F The name of the field being queried
- */
-export interface Condition<R extends Record<string, unknown>, F extends keyof R, O extends ComparisonOperation> {
-  type: 'condition'
-  /** The operation */
-  operation: O
-  /** The name of the field */
-  field: F
-  /** The value being checked */
-  value: typeof COMPARISON_TYPE_DICTIONARY[O] extends 'array' ? Array<R[F]> : Extract<ComparisonTypeToTSType<O>, R[F]>
-  /** Was this condition validated by the constraints or is its type unknown? */
-  validated: true
-}
-/**
- * A query on a field
- */
-export interface UncheckedCondition<O extends ComparisonOperation = ComparisonOperation> {
-  type: 'condition'
-  /** The operation */
-  operation: O
-  /** The name of the field */
-  field: string
-  /** The value being checked */
-  value: Exclude<ComparisonTypeToTSType<O>, Date>
-  /** Was this condition validated by the constraints or is its type unknown? */
-  validated: false
-}
-/**
- * Reverse the keys and values of a type and aggregate by common value
- */
-type ReverseAggregate<T extends Record<any, any>> = {
-  [V in T[keyof T]]: {
-    [K in keyof T]: T[K] extends V ? K : never
-  }[keyof T]
-}
-type ReverseAggregatedTypes = ReverseAggregate<typeof COMPARISON_TYPE_DICTIONARY>
-/** Create a union of conditions; an intersection of the operation type validation and constraint type validation */
-export type CheckedConditionSpread<R extends Record<string, unknown>> = {
-  [K in keyof R]: {
-    [O in keyof ReverseAggregatedTypes]: Condition<R, K, ReverseAggregatedTypes[O]>
-  }[keyof ReverseAggregatedTypes]
-}[keyof R]
-/** Create a union of conditions that are operation type validated */
-export type UncheckedConditionSpread = {
-  [O in keyof ReverseAggregatedTypes]: UncheckedCondition<ReverseAggregatedTypes[O]>
-}[keyof ReverseAggregatedTypes]
-
-export type Expression<R extends Record<string, unknown> = Record<string, Primitive>, V extends boolean = false> =
-  Group<R, V> | (V extends true
-    ? CheckedConditionSpread<R>
-    : CheckedConditionSpread<R> | UncheckedConditionSpread)
-
-export type UncheckedExpression = (Omit<Group, 'constituents'> & { constituents: UncheckedExpression[] }) | UncheckedConditionSpread

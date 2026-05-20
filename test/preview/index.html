@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>WizardQL Dom Input Test Page</title>
+  <link rel='stylesheet' href='index.css'>
+</head>
+<body>
+  <div class='container no-scrollbar'>
+    <span
+      class='input no-scrollbar'
+      id='wizardinput'
+      role='textbox'
+      contentEditable='plaintext-only'
+      spellCheck='false'
+    ></span>
+  </div>
+
+  <iframe src='https://embeddable-monaco.lukasbach.com?readonly=true&language=json&theme=vs-light' id='iframe'></iframe>
+
+  <script type='module'>
+    import { createDOMInput } from './dist/index.js'
+
+    const iframe = document.getElementById('iframe')
+
+    createDOMInput({
+      input: document.getElementById('wizardinput'),
+      onUpdate: (parsed, tokens, string) => {
+        iframe.contentWindow?.postMessage({
+          type: 'change-value',
+          value: JSON.stringify({ parsed, tokens, string }, null, 2)
+        }, '*')
+      }
+    })
+  </script>
+</body>
+</html>

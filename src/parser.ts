@@ -1,0 +1,1380 @@
+import { ConstraintError, ParseError } from './errors'
+import { createArrayDelimitRegexString, createQuoteRegexString, createTokenRegexString, ESCAPE_REGEX, isAlpha } from './regex'
+import {
+  TYPE_PRIORITY,
+  type ConditionOperatorComparisonType,
+  type Expression,
+  type FieldType,
+  type FieldTypeRecord,
+  type GetConditionOperators,
+  type GetConditionTSType,
+  type GetJunctionOperators,
+  type GetOperators,
+  type Group,
+  type JunctionOperatorType,
+  type OperatorRecord,
+  type OperatorRecordEntry,
+  type PartType,
+  type Primitive,
+  type Token,
+  type UncheckedCondition
+} from './spec'
+
+interface InternalConditionOperatorDefinition<O extends OperatorRecord> {
+  name: GetConditionOperators<O>
+  negation: GetConditionOperators<O>
+  type: ConditionOperatorComparisonType
+  exclusionary: boolean
+}
+interface InternalJunctionOperatorDefinition<O extends OperatorRecord> {
+  name: GetJunctionOperators<O>
+  negation: GetJunctionOperators<O>
+  type: JunctionOperatorType
+  exclusionary: boolean
+}
+type InternalOperatorDefinition<O extends OperatorRecord> = InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>
+
+interface Context {
+  tokens: readonly Token[]
+  startToken: Token | undefined
+  startIndex: number | undefined
+  endToken?: Token | undefined
+  endIndex?: number | undefined
+}
+
+interface ProcessedToken {
+  /** The raw token */
+  raw: string
+  /** The token's quote contents, if surrounded by quotes */
+  unquoted: string | undefined
+  /** The token's resolved contents or quote contents, including escape backslashes */
+  escaped: string
+  /** The token's resolved contents, with the escape backslashes removed */
+  unescaped: string
+}
+
+// Helper to get all strings used in OTHER entries
+type StringsInOtherEntries<T, CurrentK> = {
+  [K in keyof T]: K extends CurrentK ? never : AllStringsInEntry<T[K]> | K
+}[keyof T]
+
+// Helper to get all strings in a single entry
+type AllStringsInEntry<E> = E extends OperatorRecordEntry
+  ? E['negationName']
+    | (E['aliases'] extends ReadonlyArray<infer A> ? A : never)
+    | (E['negationAliases'] extends ReadonlyArray<infer NA> ? NA : never)
+  : never
+
+// Validate that a keyword is not used anywhere twice (operator, negation, alias, negation alias)
+type ValidationError<Msg extends string> = string & { __error: `Error: ${Msg}` }
+type ValidateGlobalUniqueness<O extends OperatorRecord> = {
+  [K in keyof O]: O[K] extends OperatorRecordEntry
+    ? O[K] & ({
+      negationName: O[K]['negationName'] extends K | StringsInOtherEntries<O, K>
+        ? ValidationError<`Negation '${O[K]['negationName'] & string}' is already used as a key or in another entry (or not all uppercase) ${(K | StringsInOtherEntries<O, K>) & string}`>
+        : O[K]['negationName']
+
+      aliases?: O[K] extends (OperatorRecordEntry & { aliases: ReadonlyArray<infer A> })
+        ? {
+          [I in keyof O[K]['aliases']]: O[K]['aliases'][I] extends K | O[K]['negationName'] | StringsInOtherEntries<O, K> | Exclude<A, O[K]['aliases'][I]>
+            ? ValidationError<`Alias '${O[K]['aliases'][I] & string}' is already used as a key or in another entry (or not all uppercase) ${(K | O[K]['negationName'] | StringsInOtherEntries<O, K> | Exclude<A, O[K]['aliases'][I]>) & string}`>
+            : O[K]['aliases'][I]
+        }
+        : never
+
+      negationAliases?: O[K] extends (OperatorRecordEntry & { negationAliases: ReadonlyArray<infer NA> })
+        ? {
+          [I in keyof O[K]['negationAliases']]: O[K]['negationAliases'][I] extends K | O[K]['negationName'] | (O[K] extends { aliases: ReadonlyArray<infer A> } ? A : never) | StringsInOtherEntries<O, K> | Exclude<NA, O[K]['negationAliases'][I]>
+            ? ValidationError<`NegationAlias '${O[K]['negationAliases'][I] & string}' is already used as a key or in another entry (or not all uppercase) ${(K | O[K]['negationName'] | (O[K] extends { aliases: ReadonlyArray<infer A> } ? A : never) | StringsInOtherEntries<O, K> | Exclude<NA, O[K]['negationAliases'][I]>) & string}`>
+            : O[K]['negationAliases'][I]
+        }
+        : never
+    })
+    : ValidationError<`Invalid operator record key '${K & string}' (is it all uppercase?)`>
+}
+
+type ValidateUppercaseKeys<O extends OperatorRecord> = {
+  [K in keyof O]: K extends Uppercase<K & string>
+    ? O[K]
+    : ValidationError<`Operator Record contains non-uppercase key: '${K & string}'`>
+}
+
+type InternalOperationDictionary<O extends OperatorRecord> =
+  Record<GetConditionOperators<O> | GetJunctionOperators<O> | string, InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>>
+
+export interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean, D extends string> {
+  /**
+   * Restricted fields.\
+   * Restrict an entire field by setting it to true.\
+   * Restrict an exact value by providing a string.\
+   * Restrict a pattern by providing a Regex expression.\
+   * By default allow any value and restrict a collection of values by passing ['deny', VALUES[]]\
+   * By default restrict any value and allow a collection of values by passing ['allow', VALUES[]]\
+   * If the query value is of array type, it will check all entries of the array and ensure they're all allowed.\
+   * This check runs before type coercion so the value checked will always be a string. However, quotes and escapes WILL be removed
+   */
+  restricted?: Partial<Record<keyof F | (string & {}), boolean | ['allow' | 'deny', Array<string | RegExp>]>>
+
+  /**
+   * The types of fields\
+   * Either provide the field type singularly or permit multiple types with an array of field types\
+   * A field with type 'date' will parse the value into a Date object if possible (Wizard will not attempt to do this otherwise)\
+   * Type coercion priority: boolean -> date -> number -> string
+   */
+  types?: F
+
+  /**
+   * Field names in restriction checks and type checks are case insensitive
+   * @note If enabled, all fields will be returned as their casing denoted by the types or restricted record
+   * @warn Mismatching casing between the restricted record and the type record will prioritize the restricted record
+   */
+  caseInsensitive?: boolean
+
+  /**
+   * Disallow fields that are not present in the "restricted" record or the "types" record
+   */
+  disallowUnvalidated?: V
+
+  /**
+   * A callback that determines how dates are interpreted\
+   * By default, uses `new Date()`
+   */
+  dateInterpreter?: (v: string | number) => Date
+  /**
+   * A callback that determines how dates are stringified\
+   * By default, uses `.toISOString()`
+   */
+  dateSerializer?: (v: Date) => string
+
+  operators?: (O | ValidateGlobalUniqueness<O> | ValidateUppercaseKeys<O>) & ValidateGlobalUniqueness<O> & ValidateUppercaseKeys<O>
+  /**
+   * The default operator and value (in string form) for an implicit condition (positive variant)\
+   * Example: `field` or negative: `!field`\
+   * The negative will be taken by taking the complement of the default condition\
+   * By default, on the default operator definition, this is "EQUAL true". Thus, `field` -> `field EQUAL true` and `!field` -> `field NOTEQUAL true`\
+   * If undefined with a custom operator definition or specified false, implicit conditions will not be parsed
+   */
+  implicitCondition?: false | {
+    /** The default implicit operator */
+    operator: GetConditionOperators<O>
+    /** The default implicit value in string form */
+    value: string
+    /** How the value should be parsed (as a type) */
+    asType: FieldType | FieldType[]
+  }
+
+  dialects?: Record<D, Record<GetOperators<O>, string>>
+}
+
+export interface StringifyOptions<D extends string> {
+  /**
+   * The dialect to use for expressing operations
+   */
+  dialect: D
+  /**
+   * Always surround a group with parentheses, even if unnecessary
+   * @default false
+   */
+  alwaysParenthesize?: boolean
+  /**
+   * Don't include spaces (Spaces will be included around operators that are "linguistic")
+   * @default false
+   */
+  compact?: boolean
+  /**
+   * Condense implicit-able value conditions to their implicit denotations\
+   * With the default operator definitions, this is booleans
+   * @example 'field'
+   * @example '!field'
+   * @default false
+   */
+  condenseImplicit?: boolean
+}
+
+export interface AggregationValue<O extends OperatorRecord = OperatorRecord> {
+  /** The value being checked */
+  value: GetConditionTSType<(O[GetConditionOperators<O>] & OperatorRecordEntry & { type: ConditionOperatorComparisonType })['type']>
+  /** The operator being used */
+  operation: GetOperators<O>
+  /** Is this an exclusionary operator? (The negation of a defined operator) */
+  exclusionary: boolean
+}
+
+/**
+ * A WizardQL parser instance
+ */
+export class WizardParser<const F extends FieldTypeRecord, const O extends OperatorRecord = typeof WizardParser.DEFAULT_OPERATORS, const V extends boolean = false, const D extends string = typeof WizardParser.DEFAULT_OPERATORS extends O ? keyof typeof WizardParser.DEFAULT_DIALECTS : string> {
+  static readonly DEFAULT_OPERATORS = {
+    AND: {
+      negationName: 'OR',
+      type: 'productjunction',
+      aliases: ['&&', '&', '^', '\u2227'],
+      negationAliases: ['||', '|', 'V', '\u2228']
+    },
+
+    EQUAL: {
+      negationName: 'NOTEQUAL',
+      type: 'primitive',
+      aliases: ['EQUALS', 'EQ', 'IS', '=', '=='],
+      negationAliases: ['NOTEQUALS', 'NEQ', 'ISNT', '!=', '!==', '\u2260']
+    },
+    LESS: {
+      negationName: 'GEQ',
+      type: 'numeric',
+      aliases: ['<'],
+      negationAliases: ['>=', '=>', '\u2265'],
+      exclusionary: true
+    },
+    GREATER: {
+      negationName: 'LEQ',
+      type: 'numeric',
+      aliases: ['>', 'MORE', 'MORETHAN'],
+      negationAliases: ['<=', '=<', '\u2264'],
+      exclusionary: true
+    },
+    IN: {
+      negationName: 'NOTIN',
+      type: 'array',
+      aliases: [':', '\u2208'],
+      negationAliases: ['!:', '\u2209']
+    },
+    MATCH: {
+      negationName: 'NOTMATCH',
+      type: 'string',
+      aliases: ['MATCHES', '~', '\u2245'],
+      negationAliases: ['NOTMATCHES', '!~', '\u2247']
+    }
+  } as const satisfies OperatorRecord
+
+  static readonly DEFAULT_DIALECTS = {
+    programmatic: {
+      AND: '&',
+      OR: '|',
+      EQUAL: '=',
+      NOTEQUAL: '!=',
+      GEQ: '>=',
+      GREATER: '>',
+      LEQ: '<=',
+      LESS: '<',
+      IN: ':',
+      NOTIN: '!:',
+      MATCH: '~',
+      NOTMATCH: '!~'
+    },
+    linguistic: {
+      AND: 'AND',
+      OR: 'OR',
+      EQUAL: 'EQUALS',
+      NOTEQUAL: 'NOTEQUALS',
+      GEQ: 'GEQ',
+      GREATER: 'GREATER',
+      LEQ: 'LEQ',
+      LESS: 'LESS',
+      IN: 'IN',
+      NOTIN: 'NOTIN',
+      MATCH: 'MATCHES',
+      NOTMATCH: 'NOTMATCHES'
+    },
+    formal: {
+      AND: '\u2227',
+      OR: '\u2228',
+      EQUAL: '=',
+      NOTEQUAL: '\u2260',
+      GEQ: '\u2265',
+      GREATER: '>',
+      LEQ: '\u2264',
+      LESS: '<',
+      IN: '\u2208',
+      NOTIN: '\u2209',
+      MATCH: '\u2245',
+      NOTMATCH: '\u2247'
+    }
+  } as const satisfies Record<string, Record<GetOperators<typeof this.DEFAULT_OPERATORS>, string>>
+
+  protected static readonly QUOTES = ['\'', '"', '`'] as const
+  protected static readonly NEGATORS = ['!'] as const
+  protected static readonly ARRAY_DELIMITERS = [','] as const
+
+  protected static readonly ARRAY_BRACKETS = [
+    ['[', ']'],
+    ['{', '}']
+  ] as const satisfies Array<[open: string, close: string]>
+
+  protected static readonly GROUP_BRACKETS = [
+    ['(', ')']
+  ] as const satisfies Array<[open: string, close: string]>
+
+  protected readonly OPERATOR_DICTIONARY: InternalOperationDictionary<O>
+
+  protected readonly CONFIG: WizardParserConfig<F, O, V, D> & Required<Pick<WizardParserConfig<F, O, V, D>, 'operators'>>
+
+  protected readonly TOKEN_REGEX: RegExp
+  protected readonly QUOTE_REGEX: RegExp
+  protected readonly QUOTE_EDGE_REGEX: RegExp
+  protected readonly ARRAY_DELIMITER_REGEX: RegExp
+
+  protected readonly FIELD_LIST: Map<string, string>
+
+  /**
+   * Construct a WizardQL parser
+   * @param config The parser configuration
+   */
+  constructor (config: WizardParserConfig<F, O, V, D> = {}) {
+    this.CONFIG = config as any
+
+    if (!config.operators) {
+      config.operators = WizardParser.DEFAULT_OPERATORS as any
+
+      if (config.implicitCondition === undefined) {
+        config.implicitCondition = {
+          operator: 'EQUAL',
+          value: 'true',
+          asType: 'boolean'
+        } as any
+      }
+
+      if (!config.dialects) config.dialects = WizardParser.DEFAULT_DIALECTS as any
+    }
+
+    this.FIELD_LIST = new Map()
+    if (config.caseInsensitive) {
+      if (config.types) {
+        for (const key in config.types) this.FIELD_LIST.set(key.toLowerCase(), key)
+      }
+
+      if (config.restricted) {
+        for (const key in config.restricted) this.FIELD_LIST.set(key.toLowerCase(), key)
+      }
+    }
+
+    this.OPERATOR_DICTIONARY = {} as InternalOperationDictionary<O>
+    for (const operationName in config.operators) {
+      const operation = config.operators[operationName] as OperatorRecordEntry
+
+      const opDef = {
+        name: operationName,
+        type: operation.type,
+        negation: operation.negationName,
+        exclusionary: operation.exclusionary ?? false
+      } as unknown as InternalOperatorDefinition<O>
+      const negOpDef = {
+        name: operation.negationName,
+        type: operation.type === 'sumjunction'
+          ? 'productjunction'
+          : operation.type === 'productjunction'
+            ? 'sumjunction'
+            : operation.type,
+        negation: operationName,
+        exclusionary: !operation.exclusionary
+      } as unknown as InternalOperatorDefinition<O>
+
+      if (operationName in this.OPERATOR_DICTIONARY) throw Error(`Two operator definitions have been supplied with the same name "${operationName}"`)
+      this.OPERATOR_DICTIONARY[opDef.name] = opDef
+
+      if (operation.negationName in this.OPERATOR_DICTIONARY) throw Error(`An operator definition shares a negation name with another operator's definition "${operation.negationName}"`)
+      this.OPERATOR_DICTIONARY[negOpDef.name] = negOpDef
+
+      if (operation.aliases) {
+        for (const alias of operation.aliases) {
+          if (alias in this.OPERATOR_DICTIONARY) throw Error(`An operator definition has an alias that refers to another operator "${alias}"`)
+          this.OPERATOR_DICTIONARY[alias as GetOperators<O>] = opDef
+        }
+      }
+
+      if (operation.negationAliases) {
+        for (const alias of operation.negationAliases) {
+          if (alias in this.OPERATOR_DICTIONARY) throw Error(`An operator definition has a negation alias that refers to another operator "${alias}"`)
+          this.OPERATOR_DICTIONARY[alias as GetOperators<O>] = negOpDef
+        }
+      }
+    }
+
+    this.TOKEN_REGEX = new RegExp(
+      createTokenRegexString(
+        Object.keys(this.OPERATOR_DICTIONARY)
+          .concat(WizardParser.GROUP_BRACKETS.flat())
+          .concat(WizardParser.ARRAY_BRACKETS.flat())
+          .concat(WizardParser.NEGATORS)
+          .concat(WizardParser.ARRAY_DELIMITERS),
+        WizardParser.QUOTES
+      ),
+      'g'
+    )
+    const quoteRegexStr = createQuoteRegexString(WizardParser.QUOTES)
+    this.QUOTE_REGEX = new RegExp(quoteRegexStr)
+    this.QUOTE_EDGE_REGEX = new RegExp(`^${quoteRegexStr}$`)
+    this.ARRAY_DELIMITER_REGEX = new RegExp(createArrayDelimitRegexString(WizardParser.QUOTES, WizardParser.ARRAY_DELIMITERS), 'g')
+
+    Object.freeze(config)
+  }
+
+  /**
+   * Take a string, sanitize it, and push it to an array if it has a length
+   * @param array The array to push to
+   * @param item  The item to sanitize and push
+   * @param index The index of the token in the original string
+   * @returns     The token, if pushed
+   */
+  protected static pushSanitized (array: Token[], item: string, index: number): Token | undefined {
+    let trimmed = item.trimEnd()
+    const pretrimLength = trimmed.length
+    trimmed = trimmed.trimStart()
+    const lengthDiff = trimmed.length - pretrimLength
+
+    if (trimmed) {
+      const token = { content: trimmed, index: index - lengthDiff }
+      array.push(token)
+      return token
+    }
+  }
+
+  /**
+   * Given an input, parse a date using the provided parse function or the default method
+   * @param v The input to parse
+   * @returns The date value
+   */
+  protected interpretDate (v: string | number): Date {
+    if (this.CONFIG.dateInterpreter) return this.CONFIG.dateInterpreter(v)
+    else return new Date(v)
+  }
+
+  /**
+   * Take a string and tokenize it for parsing with a specific pattern
+   * @param expression The expression to tokenize
+   * @param pattern    The tokenization pattern
+   * @returns          An array of tokens
+   */
+  protected _tokenize (expression: string, pattern: RegExp): Token[] {
+    const tokens: Token[] = []
+    const matches = expression.toUpperCase().matchAll(pattern)
+
+    let lastMatchEnd: number | null = null
+    for (const match of matches) {
+      WizardParser.pushSanitized(tokens, expression.slice(lastMatchEnd ?? 0, match.index), lastMatchEnd === null ? 0 : lastMatchEnd)
+
+      if (WizardParser.ARRAY_BRACKETS.some(([o]) => match[0] === o)) {
+        const startToken = {
+          content: match[0],
+          index: match.index
+        }
+        tokens.push(startToken)
+
+        let subopenings = 0
+        let endToken: Token | undefined
+        for (const submatch of matches) {
+          if (
+            (match[0] === submatch[0]) ||
+              (match[0] === submatch[0])
+          ) ++subopenings
+
+          if (
+            WizardParser.ARRAY_BRACKETS.some(([o, c]) => match[0] === o && submatch[0] === c)
+          ) {
+            if (subopenings) --subopenings
+            else {
+              endToken = {
+                content: submatch[0],
+                index: submatch.index
+              }
+
+              break
+            }
+          }
+        }
+
+        const subtokens = endToken
+          ? this._tokenize(expression.slice(startToken.index + startToken.content.length, endToken.index), this.ARRAY_DELIMITER_REGEX)
+          : this._tokenize(expression.slice(startToken.index + startToken.content.length), pattern)
+
+        for (const subtoken of subtokens) subtoken.index += match.index + 1
+        tokens.push(...subtokens)
+        if (endToken) {
+          tokens.push(endToken)
+          lastMatchEnd = endToken.index + endToken.content.length
+        } else {
+          // Assume we reached the end of the matches in the subiteration
+          lastMatchEnd = expression.length
+          break
+        }
+
+        continue
+      } else {
+        WizardParser.pushSanitized(
+          tokens,
+          match.groups?.quotecontent !== undefined
+            ? expression.slice(match.index, match.index + match[0].length) // This isn't a real token and is a string; don't append its uppercase version
+            : match[0],
+          match.index
+        )
+      }
+
+      lastMatchEnd = match.index + match[0].length
+    }
+    WizardParser.pushSanitized(tokens, expression.slice(lastMatchEnd ?? 0), lastMatchEnd ?? 0)
+
+    return tokens
+  }
+
+  /**
+   * Take a string and tokenize it for parsing
+   * @param expression The expression to tokenize
+   * @returns          An array of tokens
+   */
+  tokenize (expression: string): Token[] {
+    return this._tokenize(expression, this.TOKEN_REGEX)
+  }
+
+  /**
+   * Get an opening closure's closing index
+   * @param tokens  The token array
+   * @param start   The index of the opening closure
+   * @param opening The token to consider as opening
+   * @param closing The token to consider as closing
+   * @returns       The index of the closing token or -1 if not found
+   */
+  protected static getClosingIndex (tokens: readonly Token[], start: number, opening: string, closing: string): number {
+    let openingCount = 1
+
+    for (let index = start + 1; index < tokens.length; ++index) {
+      switch (tokens[index]!.content) {
+        case opening: ++openingCount; break
+        case closing: --openingCount; break
+      }
+
+      if (openingCount === 0) return index
+    }
+
+    return -1
+  }
+
+  /**
+   * Process a token to get its unquoted, escaped, and unescaped varients\
+   * Order: unquote -> escaped -> unescaped
+   * @param token The token to process
+   * @returns     An object containing the variants
+   */
+  protected processToken (token: string): ProcessedToken {
+    const unquoted = token.match(this.QUOTE_EDGE_REGEX)?.groups?.quotecontent
+    const escaped = unquoted ?? token
+    const unescaped = escaped.replaceAll(new RegExp(`(?<!${ESCAPE_REGEX}\\\\)\\\\`, 'g'), '')
+
+    return {
+      raw: token,
+      unquoted,
+      escaped,
+      unescaped
+    }
+  }
+
+  /**
+   * Apply De Morgan's Law to an expression and complement it\
+   * (Mutating operation)
+   * @param          expression The expression
+   * @throws {Error}            If the inverse operation cannot be found
+   */
+  protected complementExpression (expression: Expression<F, O, V>): void {
+    const inverse = this.OPERATOR_DICTIONARY[expression.operation].negation
+    if (!inverse) throw new Error(`Could not find inverse operation given operation name "${expression.operation}"`)
+    expression.operation = inverse
+
+    if (expression.type === 'group') expression.constituents.forEach((e) => this.complementExpression(e))
+  }
+
+  /**
+   * Coerce a string into the appropriate type for the operation based on the field type and operator
+   * @param           processedToken The value to coerce (already processed)
+   * @param           fieldTypes     The supported field types
+   * @param           operatorTypes  The supported operator types
+   * @returns                        The coerced type
+   * @throws  {Error}                Message is 'operator' if the operator type cannot be coerced and 'field' if the field type cannot be coerced
+   */
+  protected coerceType (processedToken: ProcessedToken, fieldTypes: FieldType[], operatorTypes: FieldType[]): Primitive {
+    const { raw, unescaped } = processedToken
+
+    let operatorHits = 0
+    let fieldHits = 0
+    for (const type of TYPE_PRIORITY) {
+      const operatorHit = operatorTypes.includes(type)
+      const fieldHit = fieldTypes.includes(type)
+      if (operatorHit) ++operatorHits
+      if (fieldHit) ++fieldHits
+      if (!operatorHit || !fieldHit) continue
+
+      switch (type) {
+        case 'boolean':
+          if (raw === 'true') return true
+          else if (raw === 'false') return false
+
+          break
+        case 'number': {
+          const num = Number(raw)
+          if (isNaN(num)) break
+
+          return num
+        }
+        case 'string': return unescaped
+        case 'date': {
+          const num = Number(raw)
+          const date = this.interpretDate(isNaN(num) ? unescaped : num)
+          if (isNaN(+date)) break
+
+          return date
+        }
+      }
+
+      if (operatorTypes.includes(type)) --operatorHits
+      if (fieldTypes.includes(type)) --fieldHits
+    }
+
+    if (!operatorHits) throw new Error('operator')
+    if (!fieldHits) throw new Error('field')
+    throw new Error('operator')
+  }
+
+  /**
+   * Validate that a condition meets constraints
+   * @warn This operation mutates the condition to apply the validated field and perform type coercion
+   * @param                     condition       The condition to validate
+   * @param                     valueIsImplicit Was this value implicitly inferred? If so, don't attempt stringification
+   * @param                     ctx             Error Context
+   * @throws  {ConstraintError}
+   * @returns                                   The same reference to the condition
+   */
+  protected validateCondition (condition: Omit<UncheckedCondition<O>, 'validated' | 'value'> & { value: string | string[] }, valueIsImplicit?: boolean, ctx?: Context): Exclude<Expression<F, O, V>, Group<F, O, V>> {
+    let validated = false
+    condition.field = this.processToken(condition.field).unescaped
+    const field = this.CONFIG.caseInsensitive
+      ? this.FIELD_LIST.get(condition.field.toLowerCase()) ?? condition.field
+      : condition.field
+    const restriction = this.CONFIG.restricted?.[field]
+    const fieldType = this.CONFIG.types?.[field]
+
+    if (this.CONFIG.disallowUnvalidated && restriction === undefined && fieldType === undefined) throw new ConstraintError(`Unknown field "${condition.field}"`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+
+    const fieldTypes = fieldType && (Array.isArray(fieldType) ? fieldType : [fieldType])
+    const operationType = this.OPERATOR_DICTIONARY[condition.operation].type as ConditionOperatorComparisonType
+
+    const processedValues = (Array.isArray(condition.value) ? condition.value : [condition.value]).map((v) => this.processToken(v))
+
+    // Check if this field is allowed to be queried
+    if (restriction === true) throw new ConstraintError(`Field "${condition.field}" is restricted`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+    else if (Array.isArray(restriction)) {
+      const [philosophy, checks] = restriction
+
+      if (philosophy === 'deny') {
+        for (const check of checks) {
+          if (check instanceof RegExp) {
+            if (processedValues.some(({ unescaped }) => check.test(unescaped))) {
+              throw new ConstraintError(
+                  `Value for field "${condition.field}" violates prohibitive pattern constraint "${check.toString()}". Prohibited values/patterns: Allowed values/patterns: ${checks.join(', ')}`,
+                  ctx?.tokens,
+                  ctx?.startToken,
+                  ctx?.startIndex,
+                  ctx?.endToken,
+                  ctx?.endIndex
+              )
+            }
+          } else {
+            if (processedValues.some(({ unescaped }) => unescaped === check)) {
+              throw new ConstraintError(
+                  `Forbidden value "${check}" for field "${condition.field}". Prohibited values/patterns: ${checks.join(', ')}`,
+                  ctx?.tokens,
+                  ctx?.startToken,
+                  ctx?.startIndex,
+                  ctx?.endToken,
+                  ctx?.endIndex
+              )
+            }
+          }
+        }
+      } else {
+        for (const { unescaped } of processedValues) {
+          if (!checks.some((c) => c instanceof RegExp ? c.test(unescaped) : c === unescaped)) {
+            throw new ConstraintError(
+                `Value for field "${condition.field}" does not meet any allowed value/pattern. Allowed values/patterns: ${checks.join(', ')}`,
+                ctx?.tokens,
+                ctx?.startToken,
+                ctx?.startIndex,
+                ctx?.endToken,
+                ctx?.endIndex
+            )
+          }
+        }
+      }
+
+      validated = true
+    }
+
+    if (operationType === 'array' && !Array.isArray(condition.value)) throw new ConstraintError(`Value "${condition.value}" is not permitted for "${condition.operation}" which expects an array`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+    else if (operationType !== 'array' && Array.isArray(condition.value)) throw new ConstraintError(`Value "${condition.value.toString()}" is not permitted for "${condition.operation}" which expects a non-array value`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+
+    // Employ type coercion and see if the type works
+    // Mutate
+    for (let i = 0; i < processedValues.length; ++i) {
+      const v = processedValues[i]!
+
+      let opTypes: FieldType[]
+      if (valueIsImplicit) {
+        const implicitTypes = (this.CONFIG.implicitCondition as Exclude<typeof this.CONFIG.implicitCondition, undefined | false>).asType
+        opTypes = Array.isArray(implicitTypes) ? implicitTypes : [implicitTypes]
+      } else {
+        switch (operationType) {
+          case 'primitive':
+          case 'array':
+            opTypes = ['boolean', 'number', 'string']
+            if (fieldTypes?.includes('date')) opTypes.push('date')
+            break
+          case 'number': opTypes = ['number']; break
+          case 'date': opTypes = ['date']; break
+          case 'boolean': opTypes = ['boolean']; break
+          case 'numeric':
+            opTypes = ['number']
+            if (fieldTypes?.includes('date')) opTypes.push('date')
+            break
+          case 'string': opTypes = ['string']; break
+        }
+      }
+
+      try {
+        const value = this.coerceType(v, fieldTypes ?? opTypes, opTypes)
+        if (Array.isArray(condition.value)) (condition.value[i] as Primitive) = value
+        else (condition.value as Primitive) = value
+      } catch (err) {
+        switch ((err as Error).message) {
+          case 'operator': throw new ConstraintError(`Value "${condition.value.toString()}" not allowed for operation "${condition.operation}" which only allows for "${operationType}" type`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+          case 'field': throw new ConstraintError(`Value "${condition.value.toString()}" includes a type not permitted for field "${condition.field}". Allowed types: ${(fieldTypes ?? opTypes).join(', ')}`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+        }
+      }
+    }
+    if (fieldTypes) validated = true
+
+    // Mutate
+    const edit = condition as ReturnType<typeof this.validateCondition>
+    edit.field = field
+    edit.validated = validated
+    return edit
+  }
+
+  /**
+   * Parse tokens into an object expression
+   * @param                                  tokens  The tokens to parse into an object expression
+   * @param                                  _offset The token offset
+   * @returns                                        An expression
+   * @throws  {ParseError | ConstraintError}
+   */
+  protected _parse (tokens: readonly Token[], _offset: number): Expression<F, O, V> | null {
+      type TypedExpression = Expression<F, O, V>
+      let field: {
+        content: string
+        token: Token
+        index: number
+      } | undefined
+      let comparisonOperation: {
+        content: GetConditionOperators<O>
+        token?: Token
+        index?: number
+      } | undefined
+      let value: {
+        content: string | string[]
+        token?: Token
+        index?: number
+        implicit?: boolean
+      } | undefined
+      let inConjunction = false
+
+      let activeGroupOperation: GetJunctionOperators<O> | undefined
+      let expectingExpression = true
+      const expressions: TypedExpression[] = []
+
+      /**
+       * Get the expression group to push to (local or a subgroup for inConjunction)
+       * @warn You probably need to set inConjunction to false after using this
+       * @param                       ctx Error context
+       * @returns                         The group to push to
+       * @throws  {ParseError<false>}
+       */
+      const getExpressionGroup = (ctx?: Context): TypedExpression[] => {
+        if (inConjunction) {
+          const prior = expressions.at(-1)
+          if (!prior) throw new ParseError('Unexpected: Expression list empty when parser is meant to append to an AND group', ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+          if (prior.type !== 'group' || prior.operation !== 'AND') throw new ParseError('Unexpected: Last expression is not an AND group yet parser thinks it\'s appending to one', ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+
+          return prior.constituents
+        } return expressions
+      }
+
+      /**
+       * Resolve a condition from the defined variables
+       * @throws {ParseError<false> | ConstraintError}
+       */
+      const resolveCondition = (ctx?: Context): void => {
+        const baseCtx = {
+          tokens,
+          startToken: field?.token ?? comparisonOperation?.token ?? value?.token,
+          startIndex: field?.index ?? comparisonOperation?.index ?? value?.index,
+          endToken: value?.token ?? comparisonOperation?.token ?? field?.token,
+          endIndex: value?.index ?? comparisonOperation?.index ?? field?.index
+        }
+        if (!ctx) ctx = baseCtx
+
+        const group = getExpressionGroup(ctx)
+
+        if (field && comparisonOperation && value) {
+          if (!expectingExpression) throw new ParseError('Unexpected expression resolution before junctive operator', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
+
+          group.push(this.validateCondition({
+            type: 'condition',
+            field: field.content,
+            operation: comparisonOperation.content,
+            value: value.content
+          }, value.implicit, baseCtx))
+          inConjunction = false
+          expectingExpression = false
+        } else if (field && !comparisonOperation && !value) {
+          if (!expectingExpression) throw new ParseError('Unexpected expression resolution before junctive operator', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
+
+          if (this.CONFIG.implicitCondition) {
+            group.push(this.validateCondition({
+              type: 'condition',
+              field: field.content,
+              operation: this.CONFIG.implicitCondition.operator,
+              value: this.CONFIG.implicitCondition.value
+            }, true, baseCtx))
+            inConjunction = false
+            expectingExpression = false
+          } else throw new ParseError('Failed to resolve condition; missing operand or operator (No implicit condition is configured)', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
+        } else if (field || comparisonOperation || value !== undefined) throw new ParseError('Failed to resolve condition; missing operand or operator', ctx.tokens, ctx.startToken, ctx.startIndex, ctx.endToken, ctx.endIndex)
+
+        field = undefined
+        comparisonOperation = undefined
+        value = undefined
+      }
+
+      for (let t = 0; t < tokens.length; ++t) {
+        const token = tokens[t]!
+
+        if (WizardParser.GROUP_BRACKETS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing parenthesis', tokens, token, _offset + t)
+        if (WizardParser.ARRAY_BRACKETS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing bracket/brace', tokens, token, _offset + t)
+
+        const paren = WizardParser.GROUP_BRACKETS.find(([o]) => token.content === o)
+        if (paren) {
+          if (field || comparisonOperation || value) throw new ParseError('Tried to open a group during an operation', tokens, token, _offset + t)
+
+          const closingIndex = WizardParser.getClosingIndex(tokens, t, paren[0], paren[1])
+          if (closingIndex === -1) throw new ParseError('Missing closing parenthesis for group', tokens, token, _offset + t)
+          ++t
+
+          const subExpression = this._parse(tokens.slice(t, closingIndex), _offset + t)
+          // Simplification
+          if (subExpression) {
+            if (subExpression.type === 'group' && subExpression.operation === activeGroupOperation) expressions.push(...subExpression.constituents)
+            else {
+              const group = getExpressionGroup({ tokens, startToken: token, startIndex: _offset + t })
+              group.push(subExpression)
+              inConjunction = false
+            }
+          }
+
+          t = closingIndex
+          continue
+        }
+
+        const op = this.OPERATOR_DICTIONARY[token.content]
+
+        if (op?.type === 'sumjunction' || op?.type === 'productjunction') {
+          resolveCondition({
+            tokens,
+            startToken: field?.token ?? token,
+            startIndex: field?.index ?? _offset + t,
+            endToken: token,
+            endIndex: _offset + t
+          })
+
+          const prior = expressions.at(-1)
+          if (!prior) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
+
+          expectingExpression = true
+          if (activeGroupOperation && activeGroupOperation !== op.name) {
+            if (expressions.length < 2) throw new ParseError('Unexpected junction operator with no preceding expression', tokens, token, _offset + t)
+
+            const activeGroupOperationType = this.OPERATOR_DICTIONARY[activeGroupOperation].type
+            if (activeGroupOperationType === op.type) throw new ParseError('Mixed two junction operators of the same precedence level. Unclear how to separate without grouping', tokens, token, _offset + t)
+
+            switch (op.type) {
+              case 'productjunction': { // assume active type = sum
+                inConjunction = true
+
+                if (prior.type === 'group' && this.OPERATOR_DICTIONARY[prior.operation].type === 'productjunction') continue
+
+                expressions.splice(-1, 1)
+                expressions.push({
+                  type: 'group',
+                  operation: op.name,
+                  constituents: [
+                    prior
+                  ]
+                })
+
+                continue
+              }
+              case 'sumjunction': // assume active type = product
+              {
+                const futureSubgroup = this._parse(tokens.slice(t + 1), _offset + t)
+                if (futureSubgroup === null) throw new ParseError('Dangling junction operator', tokens, token, _offset + t)
+
+                return {
+                  type: 'group',
+                  operation: op.name,
+                  constituents: [
+                    {
+                      type: 'group',
+                      operation: activeGroupOperation,
+                      constituents: expressions
+                    },
+                    futureSubgroup
+                  ]
+                }
+              }
+            }
+          }
+
+          activeGroupOperation = op.name
+          // Simplification
+          if (expressions.length === 1 && expressions[0]?.type === 'group' && expressions[0].operation === activeGroupOperation) {
+            const exp = expressions[0]
+            expressions.splice(0, 1)
+
+            expressions.push(...exp.constituents)
+          }
+
+          continue
+        }
+
+        if (WizardParser.NEGATORS.includes(token.content)) {
+          const nextToken = tokens[t + 1]
+
+          const nextParen = WizardParser.GROUP_BRACKETS.find(([o]) => nextToken?.content === o)
+          if (nextParen) {
+            resolveCondition({
+              tokens,
+              startToken: (field?.token ?? token),
+              startIndex: field?.index ?? _offset + t,
+              endToken: (value?.token ?? comparisonOperation?.token ?? field?.token),
+              endIndex: (value?.index ?? comparisonOperation?.index ?? field?.index)!
+            })
+
+            ++t
+
+            const closingIndex = WizardParser.getClosingIndex(tokens, t, nextParen[0], nextParen[1])
+            if (closingIndex === -1) throw new ParseError('Missing closing parenthesis for group', tokens, token, _offset + t)
+
+            ++t
+
+            const futureSubExpression = this._parse(tokens.slice(t, closingIndex), _offset + t)
+            if (futureSubExpression) {
+              this.complementExpression(futureSubExpression)
+
+              // Simplification
+              if (futureSubExpression.type === 'group' && futureSubExpression.operation === activeGroupOperation) expressions.push(...futureSubExpression.constituents)
+              else {
+                const group = getExpressionGroup({
+                  tokens,
+                  startToken: token,
+                  startIndex: _offset + t,
+                  endToken: tokens[closingIndex],
+                  endIndex: closingIndex
+                })
+                group.push(futureSubExpression)
+                inConjunction = false
+              }
+            }
+
+            t = closingIndex
+
+            continue
+          }
+        }
+
+        if (!comparisonOperation || op) {
+          if (op) {
+            if (comparisonOperation || !field) throw new ParseError('Unexpected comparison operator', tokens, field?.token ?? token, field?.index ?? _offset + t, token, _offset + t)
+
+            comparisonOperation = {
+              content: op.name as GetConditionOperators<O>,
+              token,
+              index: _offset + t
+            }
+
+            continue
+          } else if (field) throw new ParseError('Expected a comparison operator', tokens, field.token, field.index, token, _offset + t)
+        }
+
+        if (!field) {
+          if (WizardParser.NEGATORS.includes(token.content)) {
+            if (!this.CONFIG.implicitCondition) throw new ParseError('Could not attempt a negative implicit condition as one is not defined in the config', tokens, token, _offset + t)
+
+            const nextToken = tokens[t + 1]
+            if (!nextToken) throw new ParseError('Unexpected "!"', tokens, token, _offset + t)
+
+            resolveCondition({
+              tokens,
+              startToken: token,
+              startIndex: _offset + t,
+              endToken: nextToken,
+              endIndex: _offset + t + 1
+            })
+
+            ++t
+
+            field = {
+              content: nextToken.content,
+              token,
+              index: _offset + t
+            }
+
+            comparisonOperation = {
+              content: this.OPERATOR_DICTIONARY[this.CONFIG.implicitCondition.operator].negation as GetConditionOperators<O>
+            }
+            value = {
+              content: this.CONFIG.implicitCondition.value,
+              implicit: true
+            }
+
+            resolveCondition({
+              tokens,
+              startToken: field.token,
+              startIndex: field.index,
+              endToken: nextToken,
+              endIndex: _offset + t
+            })
+          } else {
+            field = {
+              content: token.content,
+              token,
+              index: _offset + t
+            }
+          }
+
+          continue
+        }
+
+        if (!value) {
+          const bracket = WizardParser.ARRAY_BRACKETS.find(([o]) => token.content === o)
+          if (bracket) {
+            const closingIndex = WizardParser.getClosingIndex(tokens, t, bracket[0], bracket[1])
+            if (closingIndex === -1) throw new ParseError('Missing closing bracket/brace for array value', tokens, token, _offset + t)
+
+            ++t
+
+            const arr: string[] = []
+            value = {
+              content: arr,
+              token: tokens[closingIndex],
+              index: closingIndex
+            }
+            const arrayContents = tokens.slice(t, closingIndex)
+
+            let workingEntry = ''
+            let firstEntryToken: Token | undefined
+            let firstEntryTokenIndex: number | undefined
+            let lastEntryToken: Token | undefined
+            let lastEntryTokenIndex: number | undefined
+
+            const resolveEntry = (subtoken: Token, subindex: number): void => {
+              if (workingEntry) {
+                const subquotes = workingEntry.match(this.QUOTE_REGEX)
+                if (subquotes && (subquotes.index !== 0 || subquotes[0].length !== workingEntry.length)) throw new ParseError('Quotes must surround entire values in arrays', tokens, firstEntryToken ?? subtoken, firstEntryTokenIndex ?? subindex, lastEntryToken ?? subtoken, lastEntryTokenIndex ?? subindex)
+
+                arr.push(workingEntry)
+                workingEntry = ''
+                firstEntryToken = undefined
+                firstEntryTokenIndex = undefined
+                lastEntryToken = undefined
+                lastEntryTokenIndex = undefined
+              }
+            }
+
+            for (let ct = 0; ct < arrayContents.length; ++ct) {
+              const contentToken = arrayContents[ct]!
+
+              if (WizardParser.ARRAY_DELIMITERS.includes(contentToken.content)) {
+                if (!workingEntry) throw new ParseError('Unexpected blank entry in array', tokens, contentToken, _offset + t + ct)
+
+                resolveEntry(contentToken, _offset + t + ct)
+              } else {
+                lastEntryToken = contentToken
+                lastEntryTokenIndex = _offset + t + ct
+                if (!firstEntryToken) firstEntryToken = lastEntryToken
+                if (!firstEntryTokenIndex) firstEntryTokenIndex = lastEntryTokenIndex
+                workingEntry += contentToken.content
+              }
+            }
+            resolveEntry(arrayContents.at(-1)!, _offset + t + arrayContents.length - 1)
+
+            if (!arr.length) {
+              throw new ParseError('Empty array provided as value', tokens, token, _offset + t - 1, tokens[closingIndex], _offset + closingIndex)
+            }
+
+            t = closingIndex
+          } else {
+            value = {
+              content: token.content,
+              token,
+              index: _offset + t
+            }
+          }
+
+          resolveCondition({
+            tokens,
+            startToken: field.token,
+            startIndex: field.index,
+            endToken: value.token ?? comparisonOperation?.token ?? field.token,
+            endIndex: value.index ?? comparisonOperation?.index ?? field.index
+          })
+        }
+      }
+
+      resolveCondition({
+        tokens,
+        startToken: field?.token,
+        startIndex: field?.index,
+        endToken: value?.token ?? comparisonOperation?.token ?? field?.token,
+        endIndex: value?.index ?? comparisonOperation?.index ?? field?.index
+      })
+
+      if (inConjunction) throw new ParseError('Dangling junction operator', tokens, tokens.at(-1), _offset + tokens.length - 1)
+
+      if (activeGroupOperation) {
+        if (expressions.length === 1) throw new ParseError('Dangling junction operator', tokens, tokens.at(-1), _offset + tokens.length - 1)
+
+        return {
+          type: 'group',
+          operation: activeGroupOperation,
+          constituents: expressions
+        }
+      } else if (expressions.length > 1) throw new ParseError('Group possesses multiple conditions without disjunctive operators', tokens, tokens[0], _offset)
+      else return expressions[0] ?? null
+  }
+
+  /**
+   * Parse a Wizard expression into its object form
+   * @param                                  expression The Wizard expression as a string or as an array of tokens
+   * @returns                                           The object representation
+   * @throws  {ParseError | ConstraintError}
+   */
+  parse (expression: string | string[] | Token[]): Expression<F, O, V> | null {
+    let tokens: Token[]
+
+    if (Array.isArray(expression)) {
+      tokens = []
+
+      let type: 'string' | 'object' | undefined
+      for (let t = 0; t < expression.length; ++t) {
+        const token = expression[t]!
+
+        if (!type) type = typeof token as 'object' | 'string'
+
+        // eslint-disable-next-line valid-typeof
+        if (typeof token !== type) console.warn('WizardQL: parse was called with a mixed array of string tokens and token objects')
+
+        tokens.push(typeof token === 'string' ? { content: token, index: type === 'string' ? t : -1 } : token)
+      }
+    } else tokens = this.tokenize(expression)
+
+    return this._parse(tokens, 0)
+  }
+
+  /**
+   * Add quotes to a string value if it resembles another primitive
+   * @param value The value
+   * @returns     The value, possibly quoted, stringified
+   */
+  protected addQuotesIfNecessary (value: Primitive): string {
+    if (value instanceof Date) {
+      return this.CONFIG.dateSerializer
+        ? this.CONFIG.dateSerializer(value)
+        : value.toISOString()
+    }
+    if (typeof value !== 'string') return value.toString()
+
+    if (value === 'true') return '"true"'
+    if (value === 'false') return '"false"'
+    if (!isNaN(Number(value))) return `"${value}"`
+
+    const escaped = value.replaceAll('\\', '\\\\')
+    if (new RegExp(this.TOKEN_REGEX, 'gi').test(escaped)) return `"${escaped.replaceAll('"', '\\"')}"`
+    return escaped
+  }
+
+  /**
+   * Convert a parsed WizardQL expression to a string
+   * @param           expression The expression
+   * @param           opts       Formatting options
+   * @throws  {Error}            If no dialect dictionary is defined or dialect supplied is unknown
+   * @returns                    The formatted string
+   */
+  stringify (
+    expression: Expression<FieldTypeRecord, O>,
+    opts: D | StringifyOptions<D>
+  ): string {
+    const {
+      dialect,
+      alwaysParenthesize = false,
+      compact = false,
+      condenseImplicit = false
+    } = (typeof opts === 'string' ? { dialect: opts } : opts)
+
+    if (!this.CONFIG.dialects) throw new Error('No dialect dictionaries are defined in the config')
+    if (!(dialect in this.CONFIG.dialects)) throw new Error(`Dialect '${dialect}' is not defined in the config`)
+
+    let string = ''
+    switch (expression.type) {
+      case 'group':
+        for (const constituent of expression.constituents) {
+          if (string.length) {
+            const transformed = this.CONFIG.dialects[dialect][expression.operation]
+            const alpha = isAlpha(transformed)
+
+            if (!compact || alpha) string += ' '
+            string += transformed
+            if ((!compact || alpha)) string += ' '
+          }
+
+          // TODO: parens as part of dialect
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_BRACKETS[0][0]
+          string += this.stringify(constituent, opts)
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_BRACKETS[0][1]
+        }
+
+        break
+      case 'condition': {
+        const resolveNonImplicit = (): void => {
+          const transformed = this.CONFIG.dialects![dialect][expression.operation]
+          const alpha = isAlpha(transformed)
+
+          string += expression.field
+          if (!compact || alpha) string += ' '
+          string += transformed
+          if (!compact || alpha) string += ' '
+          if (Array.isArray(expression.value)) {
+            const join = expression.value.map((v) => this.addQuotesIfNecessary(v)).join(compact ? WizardParser.ARRAY_DELIMITERS[0] : WizardParser.ARRAY_DELIMITERS[0] + ' ')
+
+            string += `${WizardParser.ARRAY_BRACKETS[0][0]}${join}${WizardParser.ARRAY_BRACKETS[0][1]}`
+          } else string += this.addQuotesIfNecessary(expression.value)
+        }
+
+        if (condenseImplicit && this.CONFIG.implicitCondition) {
+          const implicitOperator = this.OPERATOR_DICTIONARY[this.CONFIG.implicitCondition.operator]
+
+          let isNegation = expression.operation === implicitOperator.negation
+          if (expression.operation === implicitOperator.name || isNegation) {
+            const fieldType = this.CONFIG.types?.[expression.field]
+            const fieldTypes = fieldType && (Array.isArray(fieldType) ? fieldType : [fieldType])
+            const opTypes = Array.isArray(this.CONFIG.implicitCondition.asType) ? this.CONFIG.implicitCondition.asType : [this.CONFIG.implicitCondition.asType]
+
+            const processed = this.processToken(this.CONFIG.implicitCondition.value)
+            const coerced = this.coerceType(processed, fieldTypes ?? opTypes, opTypes)
+            const bothBoolean = (typeof coerced === 'boolean' && typeof expression.value === 'boolean')
+
+            if (coerced.valueOf() === expression.value || bothBoolean) {
+              if (bothBoolean && coerced !== expression.value) isNegation = !isNegation
+
+              string += `${isNegation ? WizardParser.NEGATORS[0] : ''}${expression.field}`
+            } else resolveNonImplicit()
+          } else resolveNonImplicit()
+        } else resolveNonImplicit()
+
+        break
+      }
+    }
+
+    return string
+  }
+
+  /**
+   * (Get an array entry from a map or insert one) and return it
+   * @param map The map
+   * @param key The key the access
+   * @returns   The entry array
+   */
+  protected static getOrPutArrayInMap<T, U> (map: Map<T, U[]>, key: T): U[] {
+    const existingEntry = map.get(key)
+    if (existingEntry) return existingEntry
+    else {
+      const arr: U[] = []
+      map.set(key, arr)
+      return arr
+    }
+  }
+
+  /**
+   * Summarize a parsed expression by aggregating its queries by field
+   * @param expressions The expression or expressions to aggregate
+   * @returns           The aggregation as a map, mapping field name to queries
+   */
+  summarize (expressions: Expression<F, O> | Array<Expression<F, O>>): Map<string, Array<AggregationValue<O>>> {
+    const array = Array.isArray(expressions) ? expressions : [expressions]
+    const summary = new Map<string, Array<AggregationValue<O>>>()
+
+    for (const expression of array) {
+      if (expression.type === 'group') {
+        const constituents = this.summarize(expression.constituents)
+
+        for (const [field, values] of constituents.entries()) {
+          const collection = WizardParser.getOrPutArrayInMap(summary, field)
+
+          collection.push(...values)
+        }
+      } else {
+        const collection = WizardParser.getOrPutArrayInMap(summary, expression.field)
+
+        collection.push({
+          operation: expression.operation,
+          value: expression.value as AggregationValue<O>['value'],
+          exclusionary: this.OPERATOR_DICTIONARY[expression.operation].exclusionary
+        })
+      }
+    }
+
+    return summary
+  }
+
+  /**
+   * Given an expression part, return its type
+   * @param segment                   The segment/part
+   * @param activeArrayOpeningBracket If actively in an array, the opening bracket
+   * @returns                         The part type
+   */
+  getPartType (segment: string, activeArrayOpeningBracket?: string): PartType {
+    if (segment.match(this.QUOTE_EDGE_REGEX)) return 'quoted'
+    if (!isNaN(Number(segment))) return 'number'
+    for (const [opening, closing] of WizardParser.ARRAY_BRACKETS) {
+      if (!activeArrayOpeningBracket && segment === opening) return 'openingarraybracket'
+      else if (activeArrayOpeningBracket === opening && segment === closing) return 'closingarraybracket'
+    }
+    if (!activeArrayOpeningBracket) {
+      for (const [opening, closing] of WizardParser.GROUP_BRACKETS) {
+        if (segment === opening) return 'openinggroupbracket'
+        else if (segment === closing) return 'closinggroupbracket'
+      }
+    }
+    if (activeArrayOpeningBracket && WizardParser.ARRAY_DELIMITERS.includes(segment)) return 'arraydelimiter'
+    if (!activeArrayOpeningBracket && WizardParser.NEGATORS.includes(segment)) return 'negator'
+    if (!activeArrayOpeningBracket && segment in this.OPERATOR_DICTIONARY) {
+      const type = this.OPERATOR_DICTIONARY[segment]!.type
+      if (type === 'sumjunction' || type === 'productjunction') return 'junctionoperator'
+      else return 'conditionoperator'
+    }
+
+    return 'literal'
+  }
+
+  /**
+   * Resolve an alias to get an operator's core name
+   * @param alias The alias
+   * @returns     The core name
+   */
+  resolveOperatorAlias (alias: string): GetOperators<O> | undefined {
+    return this.OPERATOR_DICTIONARY[alias]?.name
+  }
+}

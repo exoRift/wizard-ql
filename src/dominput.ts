@@ -1,14 +1,14 @@
 /// <reference lib='dom' />
 /// <reference lib='dom.iterable' />
 
-import { type Token, type TypeRecord, ARRAY_DELIMITERS, BRACKETS, NEGATORS, OPERATION_ALIAS_DICTIONARY, OPERATION_PURPOSE_DICTIONARY, PARENS } from './spec'
-import { type ExpressionConstraints, QUOTE_EDGE_REGEX, parse, tokenize } from './parse'
+import { WizardParser, type WizardParserConfig } from './parser'
 import { ConstraintError, ParseError } from './errors'
+import type { ClassifiedToken, FieldTypeRecord, OperatorRecord } from './spec'
 
-interface DOMInputOptions<T extends TypeRecord, V extends boolean> {
+interface DOMInputOptions<F extends FieldTypeRecord, O extends OperatorRecord, V extends boolean, D extends string> {
   input: HTMLElement
-  constraints?: ExpressionConstraints<T, V>
-  onUpdate?: (expression: ReturnType<typeof parse<T, V>> | ParseError | ConstraintError, tokens: Token[], string: string) => void
+  config?: WizardParserConfig<F, O, V, D>
+  onUpdate?: (expression: ReturnType<WizardParser<F, O, V, D>['parse']> | ParseError | ConstraintError, tokens: ClassifiedToken[], string: string) => void
   parseOnInitialize?: boolean
 }
 
@@ -61,7 +61,8 @@ function setCursor (element: HTMLElement, index: number): void {
  * @warn This is a DOM function that is not meant for the backend
  * @returns A destroy function (destroys listening and functionality, not the element)
  */
-export function createDOMInput<const T extends TypeRecord, const V extends boolean> ({ input, constraints, onUpdate, parseOnInitialize }: DOMInputOptions<T, V>): () => void {
+export function createDOMInput<const F extends FieldTypeRecord, const O extends OperatorRecord, const V extends boolean, const D extends string> ({ input, config, onUpdate, parseOnInitialize }: DOMInputOptions<F, O, V, D>): () => void {
+  const parser = new WizardParser(config)
   const history: Array<{ text: string, cursor: number }> = []
   let historyIndex = -1
 
@@ -72,14 +73,14 @@ export function createDOMInput<const T extends TypeRecord, const V extends boole
     const text = input.textContent!.replaceAll('\n', '')
     const endPadding = input.textContent?.match(/\s*$/)?.[0].length ?? 0
 
-    const newTokens = tokenize(text)
+    const newTokens = parser.tokenize(text) as ClassifiedToken[]
     const lastToken = newTokens.at(-1)
-    if (lastToken && lastToken.content in OPERATION_ALIAS_DICTIONARY && focused && (!endPadding && lastToken.content.match(/^[A-Za-z]+?$/))) return
+    if (lastToken && parser.resolveOperatorAlias(lastToken.content) && focused && (!endPadding && lastToken.content.match(/^[A-Za-z]+?$/))) return
 
     const absoluteIndex = focused ? getCursorIndex(input) : 0
 
     observer.disconnect()
-    let inArray: string | undefined
+    let activeArrayOpeningBracket: string | undefined
     let offset = 0
     for (let t = 0; t < newTokens.length; ++t) { // Add new nodes
       const token = newTokens[t]!
@@ -101,17 +102,25 @@ export function createDOMInput<const T extends TypeRecord, const V extends boole
       const element = document.createElement('span')
       element.textContent = token.content
       element.toggleAttribute('data-node', true)
-      if (token.content.match(QUOTE_EDGE_REGEX)) element.toggleAttribute('data-quoted', true)
-      if (!isNaN(Number(token.content))) element.toggleAttribute('data-number', true)
-      if (PARENS.concat(BRACKETS).some((entry) => entry.includes(token.content))) {
-        if (inArray && BRACKETS.some(([o, c]) => (inArray === o && token.content === c))) inArray = undefined
-        if (!inArray) element.setAttribute('data-bracket', token.content)
-        if (!inArray && BRACKETS.some(([o]) => o === token.content)) inArray = token.content
-      }
-      if (inArray && ARRAY_DELIMITERS.includes(token.content)) element.toggleAttribute('data-delimiter', true)
-      if (!inArray && NEGATORS.includes(token.content)) element.toggleAttribute('data-negation', true)
-      if (!inArray && token.content in OPERATION_ALIAS_DICTIONARY) {
-        element.setAttribute('data-operation', OPERATION_PURPOSE_DICTIONARY[OPERATION_ALIAS_DICTIONARY[token.content as keyof typeof OPERATION_ALIAS_DICTIONARY]])
+      const partType = parser.getPartType(token.content, activeArrayOpeningBracket)
+      token.partType = partType
+
+      switch (partType) {
+        case 'quoted': element.toggleAttribute('data-quoted', true); break
+        case 'number': element.toggleAttribute('data-number', true); break
+
+        case 'openingarraybracket': activeArrayOpeningBracket = token.content
+        // eslint-disable-next-line no-fallthrough
+        case 'openinggroupbracket': element.setAttribute('data-bracket', token.content); break
+
+        case 'closingarraybracket': activeArrayOpeningBracket = undefined
+        // eslint-disable-next-line no-fallthrough
+        case 'closinggroupbracket': element.setAttribute('data-bracket', token.content); break
+
+        case 'arraydelimiter': element.toggleAttribute('data-delimiter', true); break
+        case 'negator': element.toggleAttribute('data-negator', true); break
+        case 'junctionoperator': element.setAttribute('data-operator', 'junction'); break
+        case 'conditionoperator': element.setAttribute('data-operator', 'condition'); break
       }
 
       const existing = input.childNodes.item(t + offset) as ChildNode | null
@@ -146,10 +155,10 @@ export function createDOMInput<const T extends TypeRecord, const V extends boole
       })
     }
 
-    let result: ReturnType<typeof parse<T, V>> | ParseError | ConstraintError
+    let result: ReturnType<WizardParser<F, O, V, D>['parse']> | ParseError | ConstraintError
 
     try {
-      result = parse(newTokens, constraints)
+      result = parser.parse(newTokens)
       input.removeAttribute('data-error-message')
       input.removeAttribute('data-error-start')
       input.removeAttribute('data-error-end')

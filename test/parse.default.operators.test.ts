@@ -1,10 +1,13 @@
 import { test, expect } from 'bun:test'
 
-import { type ComparisonOperation, OPERATION_ALIAS_DICTIONARY } from '../src/spec'
-import { tokenize, parse } from '../src/parse'
+// import { type ComparisonOperation, OPERATION_ALIAS_DICTIONARY } from '../src/spec'
+import { WizardParser } from '../src/parser'
+import type { GetConditionOperators } from '../src/spec'
 import { ConstraintError, ParseError } from '../src/errors'
 
 test('tokenization', () => {
+  const parser = new WizardParser()
+
   const strings = {
     '(field = string or other\\ field > 24) & boolean_field\\!': ['(', 'field', '=', 'string', 'OR', 'other\\ field', '>', '24', ')', '&', 'boolean_field\\!'],
     '!(test = foo oR bar <= baz) ^ !boolean\\ field': ['!', '(', 'test', '=', 'foo', 'OR', 'bar', '<=', 'baz', ')', '^', '!', 'boolean\\ field'],
@@ -21,18 +24,21 @@ test('tokenization', () => {
   }
 
   for (const string in strings) {
-    expect(tokenize(string).map((t) => t.content), string).toEqual(strings[string as keyof typeof strings])
+    expect(parser.tokenize(string).map((t) => t.content), string).toEqual(strings[string as keyof typeof strings])
   }
 
-  for (const operation in OPERATION_ALIAS_DICTIONARY) {
-    const string = `field ${operation.toLowerCase()} value`
+  for (const operator in WizardParser.DEFAULT_OPERATORS) {
+    const entry = WizardParser.DEFAULT_OPERATORS[operator as keyof typeof WizardParser.DEFAULT_OPERATORS]
+    for (const alias of [operator, entry.negationName, ...entry.aliases, ...entry.negationAliases]) {
+      const string = `field ${alias.toLowerCase()} value`
 
-    expect(tokenize(string).map((t) => t.content), string).toEqual(['field', operation, 'value'])
+      expect(parser.tokenize(string).map((t) => t.content), string).toEqual(['field', alias, 'value'])
+    }
   }
 
-  expect(tokenize('one\\ token').map((t) => t.content), 'one\\ token').toEqual(['one\\ token'])
+  expect(parser.tokenize('one\\ token').map((t) => t.content), 'one\\ token').toEqual(['one\\ token'])
 
-  expect(tokenize('foo = bar or (field : [1, 2])'), 'indices').toEqual([
+  expect(parser.tokenize('foo = bar or (field : [1, 2])'), 'indices').toEqual([
     {
       content: 'foo',
       index: 0
@@ -89,7 +95,9 @@ test('tokenization', () => {
 })
 
 test('basic query', () => {
-  expect(parse('field = value'), 'string query').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('field = value'), 'string query').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -97,7 +105,7 @@ test('basic query', () => {
     validated: false
   })
 
-  expect(parse('field : [foo bar , "baz", ` foobar `]'), 'array query').toEqual({
+  expect(parser.parse('field : [foo bar , "baz", ` foobar `]'), 'array query').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'IN',
@@ -105,7 +113,7 @@ test('basic query', () => {
     validated: false
   })
 
-  expect(parse('field < 8'), 'numbers').toEqual({
+  expect(parser.parse('field < 8'), 'numbers').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'LESS',
@@ -113,14 +121,14 @@ test('basic query', () => {
     validated: false
   })
 
-  expect(parse('field matches ".*substr.*"'), 'regex').toEqual({
+  expect(parser.parse('field matches ".*substr.*"'), 'regex').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'MATCH',
     value: '.*substr.*',
     validated: false
   })
-  expect(parse('field !~ "f{3}"'), 'notregex').toEqual({
+  expect(parser.parse('field !~ "f{3}"'), 'notregex').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'NOTMATCH',
@@ -130,7 +138,9 @@ test('basic query', () => {
 })
 
 test('implicit boolean', () => {
-  expect(parse('field'), 'standalone').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('field'), 'standalone').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -138,7 +148,7 @@ test('implicit boolean', () => {
     validated: false
   })
 
-  expect(parse('field & foo = bar'), 'with junction').toEqual({
+  expect(parser.parse('field & foo = bar'), 'with junction').toEqual({
     type: 'group',
     operation: 'AND',
     constituents: [
@@ -159,17 +169,26 @@ test('implicit boolean', () => {
     ]
   })
 
-  expect(parse('!foo'), 'negative').toEqual({
+  expect(parser.parse('!foo'), 'negative').toEqual({
     type: 'condition',
     field: 'foo',
-    operation: 'EQUAL',
-    value: false,
+    operation: 'NOTEQUAL',
+    value: true,
     validated: false
   })
+
+  expect(() => new WizardParser({
+    implicitCondition: false
+  }).parse('foo'), 'disabled implicit condition').toThrow('Failed to resolve condition; missing operand or operator (No implicit condition is configured)')
+  expect(() => new WizardParser({
+    implicitCondition: false
+  }).parse('!foo'), 'disabled implicit condition').toThrow('Could not attempt a negative implicit condition as one is not defined in the config')
 })
 
 test('escaped parsing', () => {
-  expect(parse('field neq \'2\''), 'numeric as string').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('field neq \'2\''), 'numeric as string').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'NOTEQUAL',
@@ -177,7 +196,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('"field 1" = foo\\ bar'), 'quoted field escaped value').toEqual({
+  expect(parser.parse('"field 1" = foo\\ bar'), 'quoted field escaped value').toEqual({
     type: 'condition',
     field: 'field 1',
     operation: 'EQUAL',
@@ -185,7 +204,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('field\\ 1 = \'foo bar\''), 'escaped field quoted value').toEqual({
+  expect(parser.parse('field\\ 1 = \'foo bar\''), 'escaped field quoted value').toEqual({
     type: 'condition',
     field: 'field 1',
     operation: 'EQUAL',
@@ -193,7 +212,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('field1 = \\"value spaced\\"'), 'escaped quotes field').toEqual({
+  expect(parser.parse('field1 = \\"value spaced\\"'), 'escaped quotes field').toEqual({
     type: 'condition',
     field: 'field1',
     operation: 'EQUAL',
@@ -201,7 +220,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('\'field\' = "\\"value\\" \\"spaced\\""'), 'escaped inner quotes field').toEqual({
+  expect(parser.parse('\'field\' = "\\"value\\" \\"spaced\\""'), 'escaped inner quotes field').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -209,7 +228,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('field !: ["entry, 1", entry 2, \'\\\'entry 3\\\'\']'), 'array entries').toEqual({
+  expect(parser.parse('field !: ["entry, 1", entry 2, \'\\\'entry 3\\\'\']'), 'array entries').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'NOTIN',
@@ -217,7 +236,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('field : ["string\\\\\\\\", "string\\\\\\""]'), 'excessive escaping').toEqual({
+  expect(parser.parse('field : ["string\\\\\\\\", "string\\\\\\""]'), 'excessive escaping').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'IN',
@@ -225,7 +244,7 @@ test('escaped parsing', () => {
     validated: false
   })
 
-  expect(parse('field : [first : second, third]'), 'operator in value').toEqual({
+  expect(parser.parse('field : [first : second, third]'), 'operator in value').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'IN',
@@ -235,71 +254,80 @@ test('escaped parsing', () => {
 })
 
 test('invalid operands', () => {
-  expect(() => parse('"1" "2" "3"'), 'no comparison').toThrow(ParseError)
-  expect(() => parse('1 = "2 3" "4 5"'), 'too many operands').toThrow(ParseError)
-  expect(() => parse('field in []'), 'no array entries').toThrow(ParseError)
-  expect(() => parse('field in []'), 'no array entries').toThrow('Token #2 -> #3 (char 9 -> 10 "[" -> "]"): Empty array provided as value')
-  expect(() => parse('[entry] = bar'), 'array as field').toThrow(ParseError)
-  expect(() => parse('foo in {{, 1}'), 'brackets in array value').toThrow(ParseError)
-  expect(() => parse('foo in {}, 1}'), 'brackets in array value').toThrow(ParseError)
-  expect(() => parse('foo in {{}, 1}'), 'brackets in array value').not.toThrow()
-  expect(() => parse('foo in [{}, 1]'), 'allowed brackets in array value').not.toThrow()
-  expect(() => parse('foo in [\'value\' unseparated, othervalue]'), 'non-surrounding string in array').toThrow(ParseError)
-  expect(() => parse('foo = 123 | (foo ~)'), 'dangling in group').toThrow(ParseError)
-  expect(() => parse('foo = 123 | (foo ~)'), 'dangling in group has known indices').not.toThrow('??')
+  const parser = new WizardParser()
+
+  expect(() => parser.parse('"1" "2" "3"'), 'no comparison').toThrow(ParseError)
+  expect(() => parser.parse('1 = "2 3" "4 5"'), 'too many operands').toThrow(ParseError)
+  expect(() => parser.parse('field in []'), 'no array entries').toThrow(ParseError)
+  expect(() => parser.parse('field in []'), 'no array entries').toThrow('Token #2 -> #3 (char 9 -> 10 "[" -> "]"): Empty array provided as value')
+  expect(() => parser.parse('[entry] = bar'), 'array as field').toThrow(ParseError)
+  expect(() => parser.parse('foo in {{, 1}'), 'brackets in array value').toThrow(ParseError)
+  expect(() => parser.parse('foo in {}, 1}'), 'brackets in array value').toThrow(ParseError)
+  expect(() => parser.parse('foo in {{}, 1}'), 'brackets in array value').not.toThrow()
+  expect(() => parser.parse('foo in [{}, 1]'), 'allowed brackets in array value').not.toThrow()
+  expect(() => parser.parse('foo in [\'value\' unseparated, othervalue]'), 'non-surrounding string in array').toThrow(ParseError)
+  expect(() => parser.parse('foo = 123 | (foo ~)'), 'dangling in group').toThrow(ParseError)
+  expect(() => parser.parse('foo = 123 | (foo ~)'), 'dangling in group has known indices').not.toThrow('??')
 })
 
 test('parsing errors', () => { // AI-generated tests
+  const parser = new WizardParser()
+
   // Invalid syntax
-  expect(() => parse('field =')).toThrow(ParseError)
-  expect(() => parse('field = AND')).toThrow(ParseError)
-  expect(() => parse('field = OR')).toThrow(ParseError)
-  expect(() => parse('field = 123 "foo"')).toThrow(ParseError)
-  expect(() => parse('field = [1, 2,')).toThrow(ParseError)
-  expect(() => parse('foo, bar')).toThrow(ParseError)
-  expect(() => parse('foo =, bar')).toThrow(ParseError)
+  expect(() => parser.parse('field =')).toThrow(ParseError)
+  expect(() => parser.parse('field = AND')).toThrow(ParseError)
+  expect(() => parser.parse('field = OR')).toThrow(ParseError)
+  expect(() => parser.parse('field = 123 "foo"')).toThrow(ParseError)
+  expect(() => parser.parse('field = [1, 2,')).toThrow(ParseError)
+  expect(() => parser.parse('foo, bar')).toThrow(ParseError)
+  expect(() => parser.parse('foo =, bar')).toThrow(ParseError)
+  expect(() => parser.parse('!')).toThrow('Unexpected "!"')
 
   // Invalid operations
-  expect(() => parse('field <> value')).toThrow(ParseError)
+  expect(() => parser.parse('field <> value')).toThrow(ParseError)
 
   // Invalid array syntax
-  expect(() => parse('field : [value1, value2')).toThrow(ParseError)
-  expect(() => parse('field = value1, value2]')).toThrow(ParseError)
+  expect(() => parser.parse('field : [value1, value2')).toThrow(ParseError)
+  expect(() => parser.parse('field = value1, value2]')).toThrow(ParseError)
 
   // Invalid group syntax
-  expect(() => parse('(field = value')).toThrow(ParseError)
-  expect(() => parse('field = value)')).toThrow(ParseError)
-  expect(() => parse('(field = value AND')).toThrow(ParseError)
-  expect(() => parse('field = value OR)')).toThrow(ParseError)
+  expect(() => parser.parse('(field = value')).toThrow(ParseError)
+  expect(() => parser.parse('field = value)')).toThrow(ParseError)
+  expect(() => parser.parse('(field = value AND')).toThrow(ParseError)
+  expect(() => parser.parse('field = value OR)')).toThrow(ParseError)
 
   // Invalid negation
-  expect(() => parse('!')).toThrow(ParseError)
-  expect(() => parse('!(field = value')).toThrow(ParseError)
+  expect(() => parser.parse('!')).toThrow(ParseError)
+  expect(() => parser.parse('!(field = value')).toThrow(ParseError)
 
   // Invalid conjunctions
-  expect(() => parse('field = value AND OR field2 = value2')).toThrow(ParseError)
-  expect(() => parse('field = value OR AND field2 = value2')).toThrow(ParseError)
+  expect(() => parser.parse('field = value AND OR field2 = value2')).toThrow(ParseError)
+  expect(() => parser.parse('field = value OR AND field2 = value2')).toThrow(ParseError)
 
   // Invalid escape sequences
-  expect(() => parse('field = value\\ AND field2 = value2')).toThrow(ParseError)
+  expect(() => parser.parse('field = value\\ AND field2 = value2')).toThrow(ParseError)
 })
 
 test('unclosed closures', () => {
-  expect(() => parse('(foo'), 'parenthesis').toThrow(ParseError)
-  expect(() => parse('(foo'), 'parenthesis').toThrow('Token #0 (char 0 "("): Missing closing parenthesis for group')
-  expect(() => parse('foo : [1'), 'bracket').toThrow(ParseError)
-  expect(() => parse('foo : [1'), 'bracket').toThrow('Token #2 (char 6 "["): Missing closing bracket/brace for array value')
-  expect(() => parse('foo : {1'), 'brace').toThrow(ParseError)
-  expect(() => parse('foo : {1'), 'brace').toThrow('Token #2 (char 6 "{"): Missing closing bracket/brace for array value')
+  const parser = new WizardParser()
 
-  expect(() => parse(')test'), 'unopened parenthesis').toThrow(ParseError)
-  expect(() => parse(')test'), 'unopened parenthesis').toThrow('Token #0 (char 0 ")"): Unexpected closing parenthesis')
-  expect(() => parse('field = ]test'), 'unopened bracket').toThrow(ParseError)
-  expect(() => parse('field = ]test'), 'unopened bracket').toThrow('Token #2 (char 8 "]"): Unexpected closing bracket/brace')
+  expect(() => parser.parse('(foo'), 'parenthesis').toThrow(ParseError)
+  expect(() => parser.parse('(foo'), 'parenthesis').toThrow('Token #0 (char 0 "("): Missing closing parenthesis for group')
+  expect(() => parser.parse('foo : [1'), 'bracket').toThrow(ParseError)
+  expect(() => parser.parse('foo : [1'), 'bracket').toThrow('Token #2 (char 6 "["): Missing closing bracket/brace for array value')
+  expect(() => parser.parse('foo : {1'), 'brace').toThrow(ParseError)
+  expect(() => parser.parse('foo : {1'), 'brace').toThrow('Token #2 (char 6 "{"): Missing closing bracket/brace for array value')
+
+  expect(() => parser.parse(')test'), 'unopened parenthesis').toThrow(ParseError)
+  expect(() => parser.parse(')test'), 'unopened parenthesis').toThrow('Token #0 (char 0 ")"): Unexpected closing parenthesis')
+  expect(() => parser.parse('field = ]test'), 'unopened bracket').toThrow(ParseError)
+  expect(() => parser.parse('field = ]test'), 'unopened bracket').toThrow('Token #2 (char 8 "]"): Unexpected closing bracket/brace')
 })
 
 test('closure hell', () => {
-  expect(parse('(((foo)) | (bar)) & (baz)')).toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('(((foo)) | (bar)) & (baz)')).toEqual({
     type: 'group',
     operation: 'AND',
     constituents: [
@@ -335,7 +363,9 @@ test('closure hell', () => {
 })
 
 test('groups', () => {
-  expect(parse('(field1 = value1 & field 2 < 2)'), 'AND group').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('(field1 = value1 & field 2 < 2)'), 'AND group').toEqual({
     type: 'group',
     operation: 'AND',
     constituents: [
@@ -356,7 +386,7 @@ test('groups', () => {
     ]
   })
 
-  expect(parse('field1 = value1 or field 2 > 2'), 'implicit OR group').toEqual({
+  expect(parser.parse('field1 = value1 or field 2 > 2'), 'implicit OR group').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -377,7 +407,7 @@ test('groups', () => {
     ]
   })
 
-  expect(parse('field1 = value1 or (field 2 : [value 2] && field_3 = value 3)'), 'complex group').toEqual({
+  expect(parser.parse('field1 = value1 or (field 2 : [value 2] && field_3 = value 3)'), 'complex group').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -411,7 +441,7 @@ test('groups', () => {
     ]
   })
 
-  expect(parse('boolean & field = value and number < 3 and array in [1, "2", 3]'), 'big and').toEqual({
+  expect(parser.parse('boolean & field = value and number < 3 and array in [1, "2", 3]'), 'big and').toEqual({
     type: 'group',
     operation: 'AND',
     constituents: [
@@ -446,7 +476,7 @@ test('groups', () => {
     ]
   })
 
-  expect(parse('((a and (b) and (c and d)))'), 'simplification').toEqual({
+  expect(parser.parse('((a and (b) and (c and d)))'), 'simplification').toEqual({
     type: 'group',
     operation: 'AND',
     constituents: [
@@ -483,21 +513,25 @@ test('groups', () => {
 })
 
 test('basic parsing errors', () => {
-  expect(() => parse('operation = ='), 'double equal').toThrow(ParseError)
-  expect(() => parse('operation = \\='), 'double equal with escape doesnt throw').not.toThrow()
-  expect(() => parse('operation = "="'), 'double equal with quotes doesnt throw').not.toThrow()
-  expect(() => parse('"field" "unknown" = foo'), 'two tokens for field').toThrow(ParseError)
-  expect(() => parse('field = "foo" bar or foo'), 'quote literal in the middle').toThrow(ParseError)
-  expect(() => parse('field = "foo" or foo "bar"'), 'quote literal at the end').toThrow(ParseError)
-  expect(() => parse('= "foo" or foo "bar"'), 'opening with comparison').toThrow(ParseError)
-  expect(() => parse('field : [[bar]'), 'unescaped bracket in array').toThrow('Missing closing bracket/brace for array value')
-  expect(() => parse('field : [bar]]'), 'unescaped bracket in array').toThrow('Unexpected closing bracket/brace')
-  expect(() => parse('field : [[bar]]'), 'unescaped bracket in array').not.toThrow()
-  expect(() => parse('field : ["[bar]", \\[bar\\]]'), 'unescaped bracket in array').not.toThrow()
+  const parser = new WizardParser()
+
+  expect(() => parser.parse('operation = ='), 'double equal').toThrow(ParseError)
+  expect(() => parser.parse('operation = \\='), 'double equal with escape doesnt throw').not.toThrow()
+  expect(() => parser.parse('operation = "="'), 'double equal with quotes doesnt throw').not.toThrow()
+  expect(() => parser.parse('"field" "unknown" = foo'), 'two tokens for field').toThrow(ParseError)
+  expect(() => parser.parse('field = "foo" bar or foo'), 'quote literal in the middle').toThrow(ParseError)
+  expect(() => parser.parse('field = "foo" or foo "bar"'), 'quote literal at the end').toThrow(ParseError)
+  expect(() => parser.parse('= "foo" or foo "bar"'), 'opening with comparison').toThrow(ParseError)
+  expect(() => parser.parse('field : [[bar]'), 'unescaped bracket in array').toThrow('Missing closing bracket/brace for array value')
+  expect(() => parser.parse('field : [bar]]'), 'unescaped bracket in array').toThrow('Unexpected closing bracket/brace')
+  expect(() => parser.parse('field : [[bar]]'), 'unescaped bracket in array').not.toThrow()
+  expect(() => parser.parse('field : ["[bar]", \\[bar\\]]'), 'unescaped bracket in array').not.toThrow()
 })
 
 test('group disjunction', () => {
-  expect(parse('field1 & field2 or !field3'), 'and -> or').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('field1 & field2 or !field3'), 'and -> or').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -524,14 +558,14 @@ test('group disjunction', () => {
       {
         type: 'condition',
         field: 'field3',
-        operation: 'EQUAL',
-        value: false,
+        operation: 'NOTEQUAL',
+        value: true,
         validated: false
       }
     ]
   })
 
-  expect(parse('vfield1 | field2 and !field3'), 'or -> and').toEqual({
+  expect(parser.parse('vfield1 | field2 and !field3'), 'or -> and').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -556,8 +590,8 @@ test('group disjunction', () => {
           {
             type: 'condition',
             field: 'field3',
-            operation: 'EQUAL',
-            value: false,
+            operation: 'NOTEQUAL',
+            value: true,
             validated: false
           }
         ]
@@ -567,14 +601,18 @@ test('group disjunction', () => {
 })
 
 test('dangling junctions', () => {
-  expect(() => parse('^ foo')).toThrow('Token #0 (char 0 "^"): Unexpected junction operator with no preceding expression')
-  expect(() => parse('foo^')).toThrow('Token #1 (char 3 "^"): Dangling junction operator')
-  expect(() => parse('V foo')).toThrow('Token #0 (char 0 "V"): Unexpected junction operator with no preceding expression')
-  expect(() => parse('foo or')).toThrow('Token #1 (char 4 "OR"): Dangling junction operator')
+  const parser = new WizardParser()
+
+  expect(() => parser.parse('^ foo')).toThrow('Token #0 (char 0 "^"): Unexpected junction operator with no preceding expression')
+  expect(() => parser.parse('foo^')).toThrow('Token #1 (char 3 "^"): Dangling junction operator')
+  expect(() => parser.parse('V foo')).toThrow('Token #0 (char 0 "V"): Unexpected junction operator with no preceding expression')
+  expect(() => parser.parse('foo or')).toThrow('Token #1 (char 4 "OR"): Dangling junction operator')
 })
 
 test('NOT on group', () => {
-  expect(parse('foo and !(bar and baz)'), 'demorgans and').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('foo and !(bar and baz)'), 'demorgans and').toEqual({
     type: 'group',
     operation: 'AND',
     constituents: [
@@ -608,7 +646,7 @@ test('NOT on group', () => {
     ]
   })
 
-  expect(parse('foo or !(bar or baz)'), 'demorgans or').toEqual({
+  expect(parser.parse('foo or !(bar or baz)'), 'demorgans or').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -642,7 +680,7 @@ test('NOT on group', () => {
     ]
   })
 
-  expect(parse('foo or !(bar and (baz or !foobar))'), 'group merging').toEqual({
+  expect(parser.parse('foo or !(bar and (baz or !foobar))'), 'group merging').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -674,8 +712,8 @@ test('NOT on group', () => {
           {
             type: 'condition',
             field: 'foobar',
-            operation: 'NOTEQUAL',
-            value: false,
+            operation: 'EQUAL',
+            value: true,
             validated: false
           }
         ]
@@ -683,61 +721,63 @@ test('NOT on group', () => {
     ]
   })
 
-  expect(() => parse('!foo OR bar = value & !(field)')).not.toThrow()
-  expect(() => parse('!foo OR bar = value & !(field)')).not.toThrow()
+  expect(() => parser.parse('!foo OR bar = value & !(field)')).not.toThrow()
+  expect(() => parser.parse('!foo OR bar = value & !(field)')).not.toThrow()
 })
 
 test('complement operators', () => {
-  expect(parse('!(foo = string)'), 'equal').toEqual({
+  const parser = new WizardParser()
+
+  expect(parser.parse('!(foo = string)'), 'equal').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'NOTEQUAL',
     value: 'string',
     validated: false
   })
-  expect(parse('!(foo = string)'), 'notequal').toEqual({
+  expect(parser.parse('!(foo = string)'), 'notequal').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'NOTEQUAL',
     value: 'string',
     validated: false
   })
-  expect(parse('!(foo >= 2)'), 'geq').toEqual({
+  expect(parser.parse('!(foo >= 2)'), 'geq').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'LESS',
     value: 2,
     validated: false
   })
-  expect(parse('!(foo <= 2)'), 'leq').toEqual({
+  expect(parser.parse('!(foo <= 2)'), 'leq').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'GREATER',
     value: 2,
     validated: false
   })
-  expect(parse('!(foo < 2)'), 'less').toEqual({
+  expect(parser.parse('!(foo < 2)'), 'less').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'GEQ',
     value: 2,
     validated: false
   })
-  expect(parse('!(foo > 2)'), 'equal').toEqual({
+  expect(parser.parse('!(foo > 2)'), 'equal').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'LEQ',
     value: 2,
     validated: false
   })
-  expect(parse('!(foo notin [1])'), 'notin').toEqual({
+  expect(parser.parse('!(foo notin [1])'), 'notin').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'IN',
     value: [1],
     validated: false
   })
-  expect(parse('!(foo ~ expression?)'), 'matches').toEqual({
+  expect(parser.parse('!(foo ~ expression?)'), 'matches').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'NOTMATCH',
@@ -745,7 +785,7 @@ test('complement operators', () => {
     validated: false
   })
 
-  expect(parse('!(foo notmatches expression?)'), 'notmatches').toEqual({
+  expect(parser.parse('!(foo notmatches expression?)'), 'notmatches').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'MATCH',
@@ -755,7 +795,9 @@ test('complement operators', () => {
 })
 
 test('operation constraints', () => {
-  const tests: Array<[ComparisonOperation, string]> = [
+  const parser = new WizardParser()
+
+  const tests: Array<[GetConditionOperators<typeof WizardParser.DEFAULT_OPERATORS>, string]> = [
     ['EQUAL', '[entry]'],
     ['NOTEQUAL', '[entry1, entry2]'],
     ['GEQ', 'string'],
@@ -768,65 +810,68 @@ test('operation constraints', () => {
     ['NOTMATCH', '[1, 5]']
   ]
 
-  for (const [op, value] of tests) expect(() => parse(`field ${op} ${value}`), op).toThrow(ConstraintError)
+  for (const [op, value] of tests) expect(() => parser.parse(`field ${op} ${value}`), op).toThrow(ConstraintError)
 })
 
 test('type constraints', () => {
-  expect(() => parse('foo = string', {
+  expect(() => new WizardParser({
     types: {
       foo: 'string'
     }
-  }), 'allowed single value').not.toThrow()
-  expect(parse('foo = string', {
+  }).parse('foo = string'), 'allowed single value').not.toThrow()
+  expect(new WizardParser({
     types: {
       foo: 'string'
     }
-  }), 'validated field set').toEqual({
+  }).parse('foo = string'), 'validated field set').toEqual({
     type: 'condition',
     field: 'foo',
     operation: 'EQUAL',
     value: 'string',
     validated: true
   })
-  expect(() => parse('foo = bar', {
+
+  expect(() => new WizardParser({
     types: {
       foo: 'number'
     }
-  }), 'prohibited single value').toThrow(ConstraintError)
-  expect(() => parse('foo in [string, 10, entry, 8]', {
+  }).parse('foo = bar'), 'prohibited single value').toThrow(ConstraintError)
+
+  expect(() => new WizardParser({
     types: {
       foo: ['string', 'number']
     }
-  }), 'allowed mixed multiple values').not.toThrow()
-  expect(() => parse('foo = bar', {
+  }).parse('foo in [string, 10, entry, 8]'), 'allowed mixed multiple values').not.toThrow()
+  expect(() => new WizardParser({
     types: {
       foo: ['string', 'number']
     }
-  }), 'allowed mixed single value').not.toThrow()
-  expect(() => parse('foo in [string, 10, true, 8]', {
+  }).parse('foo = bar'), 'allowed mixed single value').not.toThrow()
+  expect(() => new WizardParser({
+    types: {
+      foo: ['string', 'number']
+    }
+  }).parse('foo'), 'prohibited mixed single value').toThrow(ConstraintError)
+
+  expect(() => new WizardParser({
     types: {
       foo: ['boolean', 'number']
     }
-  }), 'prohibited mixed multiple values').toThrow(ConstraintError)
-  expect(() => parse('foo', {
-    types: {
-      foo: ['string', 'number']
-    }
-  }), 'prohibited mixed single value').toThrow(ConstraintError)
+  }).parse('foo in [string, 10, true, 8]'), 'prohibited mixed multiple values').toThrow(ConstraintError)
 
-  expect(() => parse('bar and fIeLD in [1, 2, peanut butter, 4]', {
+  expect(() => new WizardParser({
     types: {
       field: ['number', 'boolean']
     },
     caseInsensitive: true
-  }), 'prohibited case insensitivity').toThrow(ConstraintError)
+  }).parse('bar and fIeLD in [1, 2, peanut butter, 4]'), 'prohibited case insensitivity').toThrow(ConstraintError)
 
-  expect(parse('fIeLD in [1, 2, peanut butter, 4]', {
+  expect(new WizardParser({
     types: {
       FIELd: ['string', 'number']
     },
     caseInsensitive: true
-  }), 'allowed case insensitivity').toEqual({
+  }).parse('fIeLD in [1, 2, peanut butter, 4]'), 'allowed case insensitivity').toEqual({
     type: 'condition',
     field: 'FIELd',
     operation: 'IN',
@@ -834,7 +879,7 @@ test('type constraints', () => {
     validated: true
   })
 
-  expect(parse('field = 01234'), 'leading zero no type hint').toEqual({
+  expect(new WizardParser().parse('field = 01234'), 'leading zero no type hint').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -842,7 +887,7 @@ test('type constraints', () => {
     validated: false
   })
 
-  expect(parse('field = 01234', { types: { field: ['string'] } }), 'leading zero string type hint').toEqual({
+  expect(new WizardParser({ types: { field: ['string'] } }).parse('field = 01234'), 'leading zero string type hint').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -852,156 +897,156 @@ test('type constraints', () => {
 })
 
 test('restriction constraints', () => {
-  expect(() => parse('(foo = bar and baz = foobar) or restricted', {
+  expect(() => new WizardParser({
     restricted: {
       restricted: true
     }
-  }), 'total restriction').toThrow(ConstraintError)
+  }).parse('(foo = bar and baz = foobar) or restricted'), 'total restriction').toThrow(ConstraintError)
 
-  expect(() => parse('(foo = bar and baz = foobar) or "RESTRICTED"', {
+  expect(() => new WizardParser({
     restricted: {
       restricted: true
     },
     caseInsensitive: true
-  }), 'case insensitivity and quotes').toThrow(ConstraintError)
+  }).parse('(foo = bar and baz = foobar) or "RESTRICTED"'), 'case insensitivity and quotes').toThrow(ConstraintError)
 
   // --------- permissive ---------
 
-  expect(() => parse('field = allowed || field = string', {
+  expect(() => new WizardParser({
     restricted: {
       field: ['deny', ['string']]
     }
-  }), 'prohibited value restriction').toThrow(ConstraintError)
+  }).parse('field = allowed || field = string'), 'prohibited value restriction').toThrow(ConstraintError)
 
-  expect(() => parse('field = allowed', {
+  expect(() => new WizardParser({
     restricted: {
       field: ['deny', ['string']]
     }
-  }), 'permissive allowed value restriction').not.toThrow()
+  }).parse('field = allowed'), 'permissive allowed value restriction').not.toThrow()
 
-  expect(() => parse('array in [1, 2, cow, null, true]', {
+  expect(() => new WizardParser({
     restricted: {
       array: ['deny', ['null']]
     }
-  }), 'permissive aprohibited array checking').toThrow(ConstraintError)
+  }).parse('array in [1, 2, cow, null, true]'), 'permissive aprohibited array checking').toThrow(ConstraintError)
 
-  expect(() => parse('array in [1, 2, cow, true]', {
+  expect(() => new WizardParser({
     restricted: {
       array: ['deny', ['null']]
     }
-  }), 'permissive aallowed array checking').not.toThrow()
+  }).parse('array in [1, 2, cow, true]'), 'permissive aallowed array checking').not.toThrow()
 
-  expect(() => parse('plural in [cows, dogs, cats, pigs]', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['deny', [/[^s]$/]]
     }
-  }), 'permissive aallowed regexing').not.toThrow()
+  }).parse('plural in [cows, dogs, cats, pigs]'), 'permissive aallowed regexing').not.toThrow()
 
-  expect(() => parse('plural in [cows, dogs, cat, pigs]', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['deny', [/[^s]$/]]
     }
-  }), 'permissive aprohibited regexing').toThrow(ConstraintError)
+  }).parse('plural in [cows, dogs, cat, pigs]'), 'permissive aprohibited regexing').toThrow(ConstraintError)
 
   // --------- prohibitive ---------
 
-  expect(() => parse('field = notallowed || field = notallowedeither', {
+  expect(() => new WizardParser({
     restricted: {
       field: ['allow', ['string']]
     }
-  }), 'prohibitive prohibited value restriction').toThrow(ConstraintError)
+  }).parse('field = notallowed || field = notallowedeither'), 'prohibitive prohibited value restriction').toThrow(ConstraintError)
 
-  expect(() => parse('field = allowed || field = string', {
+  expect(() => new WizardParser({
     restricted: {
       field: ['allow', ['other', 'string']]
     }
-  }), 'prohibitive prohibited value restriction with two options').toThrow(ConstraintError)
+  }).parse('field = allowed || field = string'), 'prohibitive prohibited value restriction with two options').toThrow(ConstraintError)
 
-  expect(() => parse('field = allowed || field = string', {
+  expect(() => new WizardParser({
     restricted: {
       field: ['allow', ['string', /^allowed$/]]
     }
-  }), 'prohibitive allowed value restriction with two options mixed type').not.toThrow()
+  }).parse('field = allowed || field = string'), 'prohibitive allowed value restriction with two options mixed type').not.toThrow()
 
-  expect(() => parse('array in [1, 2, cow, null, true]', {
+  expect(() => new WizardParser({
     restricted: {
       array: ['allow', ['null', 'cow']]
     }
-  }), 'prohibitive prohibited array checking 1 instance').toThrow(ConstraintError)
+  }).parse('array in [1, 2, cow, null, true]'), 'prohibitive prohibited array checking 1 instance').toThrow(ConstraintError)
 
-  expect(() => parse('array in [1, 2, cow, true]', {
+  expect(() => new WizardParser({
     restricted: {
       array: ['allow', ['null']]
     }
-  }), 'prohibitive prohibited array checking no instance').toThrow(ConstraintError)
+  }).parse('array in [1, 2, cow, true]'), 'prohibitive prohibited array checking no instance').toThrow(ConstraintError)
 
-  expect(() => parse('array in [null, bar]', {
+  expect(() => new WizardParser({
     restricted: {
       array: ['allow', ['bar', 'null']]
     }
-  }), 'prohibitive allowed array checking all instance').not.toThrow()
+  }).parse('array in [null, bar]'), 'prohibitive allowed array checking all instance').not.toThrow()
 
-  expect(() => parse('plural in [cows, dogs, cats, pigs]', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['allow', [/[^s]$/]]
     }
-  }), 'prohibitive allowed regexing').toThrow(ConstraintError)
+  }).parse('plural in [cows, dogs, cats, pigs]'), 'prohibitive allowed regexing').toThrow(ConstraintError)
 
-  expect(() => parse('plural in [cows, dogs, cat, pigs]', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['allow', [/[^s]$/]]
     }
-  }), 'prohibitive prohibited regexing').toThrow(ConstraintError)
+  }).parse('plural in [cows, dogs, cat, pigs]'), 'prohibitive prohibited regexing').toThrow(ConstraintError)
 
-  expect(() => parse('plural in [cow, dog, cats, pig]', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['allow', [/[^s]$/, /^cats$/]]
     }
-  }), 'prohibitive allowed regexing').not.toThrow()
+  }).parse('plural in [cow, dog, cats, pig]'), 'prohibitive allowed regexing').not.toThrow()
 
-  expect(() => parse('plural in [cow, dog, cats, pig]', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['allow', [/[^s]$/, /^cats$/]],
       singular: ['deny', ['foo']]
     },
     disallowUnvalidated: true
-  }), 'disallow unvalidated allowed 1 exp').not.toThrow()
+  }).parse('plural in [cow, dog, cats, pig]'), 'disallow unvalidated allowed 1 exp').not.toThrow()
 
-  expect(() => parse('plural in [cow, dog, cats, pig] or singular = bar', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['allow', [/[^s]$/, /^cats$/]],
       singular: ['deny', ['foo']]
     },
     disallowUnvalidated: true
-  }), 'disallow unvalidated allowed 2 exps').not.toThrow()
+  }).parse('plural in [cow, dog, cats, pig] or singular = bar'), 'disallow unvalidated allowed 2 exps').not.toThrow()
 
-  expect(() => parse('plural in [cow, dog, cats, pig] and unknown matches .{3} or singular = bar', {
+  expect(() => new WizardParser({
     restricted: {
       plural: ['allow', [/[^s]$/, /^cats$/]],
       singular: ['deny', ['foo']]
     },
     disallowUnvalidated: true
-  }), 'disallow unvalidated unknown field').toThrow(ConstraintError)
+  }).parse('plural in [cow, dog, cats, pig] and unknown matches .{3} or singular = bar'), 'disallow unvalidated unknown field').toThrow(ConstraintError)
 
-  expect(() => parse('plural in [cow, dog, cats, pig] and unknown matches .{3} or singular = bar', {
+  expect(() => new WizardParser({
     types: {
       plural: ['string']
     },
     disallowUnvalidated: true
-  }), 'present in types throws').toThrow(ConstraintError)
+  }).parse('plural in [cow, dog, cats, pig] and unknown matches .{3} or singular = bar'), 'present in types throws').toThrow(ConstraintError)
 
-  expect(() => parse('plural in [cow, dog, cats, pig] or plural = bar', {
+  expect(() => new WizardParser({
     types: {
       plural: ['string']
     },
     disallowUnvalidated: true
-  }), 'present in types not throws').not.toThrow()
+  }).parse('plural in [cow, dog, cats, pig] or plural = bar'), 'present in types not throws').not.toThrow()
 
-  expect(parse('field = 1234', {
+  expect(new WizardParser({
     types: {
       field: ['string']
     }
-  }), 'number coerced to string if needed (single value)').toEqual({
+  }).parse('field = 1234'), 'number coerced to string if needed (single value)').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1009,11 +1054,11 @@ test('restriction constraints', () => {
     validated: true
   })
 
-  expect(parse('field in [1234, 5678]', {
+  expect(new WizardParser({
     types: {
       field: ['string']
     }
-  }), 'number coerced to string if needed (multiple value)').toEqual({
+  }).parse('field in [1234, 5678]'), 'number coerced to string if needed (multiple value)').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'IN',
@@ -1021,11 +1066,11 @@ test('restriction constraints', () => {
     validated: true
   })
 
-  expect(parse('field = false', {
+  expect(new WizardParser({
     types: {
       field: ['string']
     }
-  }), 'boolean coerced to string if needed').toEqual({
+  }).parse('field = false'), 'boolean coerced to string if needed').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1033,11 +1078,11 @@ test('restriction constraints', () => {
     validated: true
   })
 
-  expect(() => parse('field = "foo"', { restricted: { field: ['allow', [/^foo$/]] } }), 'Test Regex matching on forced strings').not.toThrow()
+  expect(() => new WizardParser({ restricted: { field: ['allow', [/^foo$/]] } }).parse('field = "foo"'), 'Test Regex matching on forced strings').not.toThrow()
 })
 
 test('date conversion', () => {
-  expect(parse('field = 2025-05-16'), 'by default not interpreted').toEqual({
+  expect(new WizardParser().parse('field = 2025-05-16'), 'by default not interpreted').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1045,7 +1090,7 @@ test('date conversion', () => {
     validated: false
   })
 
-  expect(parse('field = 2025-05-16', { types: { field: 'date' } }), 'interpreted pt. 1').toEqual({
+  expect(new WizardParser({ types: { field: 'date' } }).parse('field = 2025-05-16'), 'interpreted pt. 1').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1054,7 +1099,7 @@ test('date conversion', () => {
   })
 
   const now = new Date()
-  expect(parse(`field = "${now.toISOString()}"`, { types: { field: 'date' } }), 'interpreted pt. 2').toEqual({
+  expect(new WizardParser({ types: { field: 'date' } }).parse(`field = "${now.toISOString()}"`), 'interpreted pt. 2').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1062,7 +1107,7 @@ test('date conversion', () => {
     validated: true
   })
 
-  expect(parse('field < foo or field = bar', { types: { field: ['date', 'string'] }, dateInterpreter: (v) => v === 'foo' ? new Date(123) : new Date(NaN) }), 'custom function').toEqual({
+  expect(new WizardParser({ types: { field: ['date', 'string'] }, dateInterpreter: (v) => v === 'foo' ? new Date(123) : new Date(NaN) }).parse('field < foo or field = bar'), 'custom function').toEqual({
     type: 'group',
     operation: 'OR',
     constituents: [
@@ -1083,7 +1128,7 @@ test('date conversion', () => {
     ]
   })
 
-  expect(parse('field matches 2025-05-16', { types: { field: ['date', 'string'] } }), 'not parsed for string operation').toEqual({
+  expect(new WizardParser({ types: { field: ['date', 'string'] } }).parse('field matches 2025-05-16'), 'not parsed for string operation').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'MATCH',
@@ -1093,7 +1138,7 @@ test('date conversion', () => {
 })
 
 test('type priority', () => {
-  expect(parse('field = true', { types: { field: ['string', 'number', 'boolean', 'date'] } }), 'boolean').toEqual({
+  expect(new WizardParser({ types: { field: ['string', 'number', 'boolean', 'date'] } }).parse('field = true'), 'boolean').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1101,7 +1146,7 @@ test('type priority', () => {
     validated: true
   })
 
-  expect(parse('field = true', { types: { field: ['string', 'number', 'date'] } }), 'no boolean').toEqual({
+  expect(new WizardParser({ types: { field: ['string', 'number', 'date'] } }).parse('field = true'), 'no boolean').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1109,7 +1154,7 @@ test('type priority', () => {
     validated: true
   })
 
-  expect(parse('field = 2025', { types: { field: ['string', 'number', 'boolean', 'date'] } }), 'date as number').toEqual({
+  expect(new WizardParser({ types: { field: ['string', 'number', 'boolean', 'date'] } }).parse('field = 2025'), 'date as number').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1117,7 +1162,7 @@ test('type priority', () => {
     validated: true
   })
 
-  expect(parse('field = 2025-02', { types: { field: ['string', 'number', 'boolean', 'date'] } }), 'date as string').toEqual({
+  expect(new WizardParser({ types: { field: ['string', 'number', 'boolean', 'date'] } }).parse('field = 2025-02'), 'date as string').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1125,7 +1170,7 @@ test('type priority', () => {
     validated: true
   })
 
-  expect(parse('field = 2025', { types: { field: ['string', 'number', 'boolean'] } }), 'number').toEqual({
+  expect(new WizardParser({ types: { field: ['string', 'number', 'boolean'] } }).parse('field = 2025'), 'number').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',
@@ -1133,7 +1178,7 @@ test('type priority', () => {
     validated: true
   })
 
-  expect(parse('field = 2025', { types: { field: ['string'] } }), 'string').toEqual({
+  expect(new WizardParser({ types: { field: ['string'] } }).parse('field = 2025'), 'string').toEqual({
     type: 'condition',
     field: 'field',
     operation: 'EQUAL',

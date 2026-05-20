@@ -1,0 +1,33 @@
+name: Quality Assurance
+
+on:
+  pull_request:
+  push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Linting, Validation, and Testing
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        bun: [1.3.14]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+      - name: Install Dependencies
+        run: bun i --frozen-lockfile
+      - name: Run Linter
+        run: bun run lint
+      - name: Run tests
+        run: bun run test

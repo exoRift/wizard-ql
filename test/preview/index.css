@@ -1,0 +1,86 @@
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+.container {
+  width: 50vw;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.25rem;
+  background-color: #e4e4e4;
+  border: 1px solid black;
+  border-radius: 0.5rem;
+}
+
+.input {
+  width: 0;
+  flex-grow: 1;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  outline: none;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: auto;
+}
+
+.input br {
+  display: none;
+}
+
+.input:empty::after {
+  content: 'Type a query here...';
+  font-style: italic;
+  cursor: text;
+  opacity: 0.75;
+}
+
+.input [data-operator='junction'] {
+  color: #9716a3;
+}
+
+.input [data-operator='condition'] {
+  color: #16a34a;
+}
+
+.input :is([data-bracket], [data-delimiter]) {
+  color: #1d4ed8;
+}
+
+.input [data-negation] {
+  color: #dc2626;
+}
+
+.input [data-number] {
+  color: #f97316;
+}
+
+.input [data-quoted] {
+  color: #22c55e;
+}
+
+.input [data-node][data-error] {
+  background-color: rgba(239, 68, 68, 0.8);
+}
+
+.input[data-error-message]::after {
+  content: attr(data-error-message);
+  margin-left: 1.5rem;
+  color: #f87171;
+  font-weight: 700;
+}
+
+.input[data-error-message] {
+  border: 1px solid var(--error);
+}
+
+iframe {
+  width: 80vw;
+  height: 70vh;
+  margin-top: 2rem;
+}
