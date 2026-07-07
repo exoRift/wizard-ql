@@ -6,7 +6,7 @@
   },
   "homepage": "https://github.com/exoRift/wizard-ql",
   "description": "WizardQL is a natural-language-like query language for constructing data queries for resources that meet conditions.",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/exoRift/wizard-ql.git"
@@ -44,9 +44,6 @@
     "eslint-config": "github:exoRift/eslint-config",
     "eslint-plugin-jsdoc": "^50.6.11",
     "tsd": "^0.33.0"
-  },
-  "optionalDependencies": {
-    "knex": "^3.1.0"
   },
   "peerDependencies": {
     "typescript": "^5.8.3"

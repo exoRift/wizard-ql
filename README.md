@@ -20,6 +20,9 @@
 
 [Demo](https://exoRift.github.io/wizard-ql)
 
+## Installation
+`npm i wizard-ql`
+
 ## Examples
 `WizardParser.parse('(rank >= 10 & role = admin) | banned')`
 
