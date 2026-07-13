@@ -102,6 +102,8 @@ type ValidateUppercaseKeys<O extends OperatorRecord> = {
 type InternalOperationDictionary<O extends OperatorRecord> =
   Record<GetConditionOperators<O> | GetJunctionOperators<O> | string, InternalConditionOperatorDefinition<O> | InternalJunctionOperatorDefinition<O>>
 
+type ReadonlyNonemptyArray<T> = readonly [T, ...T[]]
+
 export interface WizardParserConfig<F extends FieldTypeRecord, O extends OperatorRecord, out V extends boolean, D extends string> {
   /**
    * Restricted fields.\
@@ -113,7 +115,7 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
    * If the query value is of array type, it will check all entries of the array and ensure they're all allowed.\
    * This check runs before type coercion so the value checked will always be a string. However, quotes and escapes WILL be removed
    */
-  restricted?: Partial<Record<keyof F | (string & {}), boolean | ['allow' | 'deny', Array<string | RegExp>]>>
+  restricted?: Partial<Record<keyof F | (string & {}), boolean | ['allow' | 'deny', ReadonlyArray<string | RegExp>]>>
 
   /**
    * The types of fields\
@@ -160,10 +162,25 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
     /** The default implicit value in string form */
     value: string
     /** How the value should be parsed (as a type) */
-    asType: FieldType | FieldType[]
+    asType: FieldType | readonly FieldType[]
   }
 
+  /**
+   * A specification of how to stringify a parsed expression.\
+   * Provide a record that maps dialect names to a record which maps operator names to their stringified expressions
+   */
   dialects?: Record<D, Record<GetOperators<O>, string>>
+
+  /**
+   * Symbol overrides
+   */
+  symbols?: {
+    quotes?: ReadonlyNonemptyArray<string>
+    negators?: ReadonlyNonemptyArray<string>
+    arrayDelimiters?: ReadonlyNonemptyArray<string>
+    arrayBrackets?: ReadonlyNonemptyArray<[opening: string, closing: string]>
+    groupBrackets?: ReadonlyNonemptyArray<[opening: string, closing: string]>
+  }
 }
 
 export interface StringifyOptions<D extends string> {
@@ -291,22 +308,22 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     }
   } as const satisfies Record<string, Record<GetOperators<typeof this.DEFAULT_OPERATORS>, string>>
 
-  protected static readonly QUOTES = ['\'', '"', '`'] as const
-  protected static readonly NEGATORS = ['!'] as const
-  protected static readonly ARRAY_DELIMITERS = [','] as const
+  protected static readonly DEFAULT_QUOTES = ['\'', '"', '`'] as const
+  protected static readonly DEFAULT_NEGATORS = ['!'] as const
+  protected static readonly DEFAULT_ARRAY_DELIMITERS = [','] as const
 
-  protected static readonly ARRAY_BRACKETS = [
+  protected static readonly DEFAULT_ARRAY_BRACKETS = [
     ['[', ']'],
     ['{', '}']
   ] as const satisfies Array<[open: string, close: string]>
 
-  protected static readonly GROUP_BRACKETS = [
+  protected static readonly DEFAULT_GROUP_BRACKETS = [
     ['(', ')']
   ] as const satisfies Array<[open: string, close: string]>
 
   protected readonly OPERATOR_DICTIONARY: InternalOperationDictionary<O>
 
-  protected readonly CONFIG: WizardParserConfig<F, O, V, D> & Required<Pick<WizardParserConfig<F, O, V, D>, 'operators'>>
+  protected readonly CONFIG: WizardParserConfig<F, O, V, D> & Required<Pick<WizardParserConfig<F, O, V, D>, 'operators'>> & { symbols: Required<Exclude<WizardParserConfig<F, O, V, D>['symbols'], undefined>> }
 
   protected readonly TOKEN_REGEX: RegExp
   protected readonly QUOTE_REGEX: RegExp
@@ -389,21 +406,28 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       }
     }
 
+    config.symbols ??= {}
+    config.symbols.quotes ??= WizardParser.DEFAULT_QUOTES
+    config.symbols.negators ??= WizardParser.DEFAULT_NEGATORS
+    config.symbols.arrayDelimiters ??= WizardParser.DEFAULT_ARRAY_DELIMITERS
+    config.symbols.arrayBrackets ??= WizardParser.DEFAULT_ARRAY_BRACKETS
+    config.symbols.groupBrackets ??= WizardParser.DEFAULT_GROUP_BRACKETS
+
     this.TOKEN_REGEX = new RegExp(
       createTokenRegexString(
         Object.keys(this.OPERATOR_DICTIONARY)
-          .concat(WizardParser.GROUP_BRACKETS.flat())
-          .concat(WizardParser.ARRAY_BRACKETS.flat())
-          .concat(WizardParser.NEGATORS)
-          .concat(WizardParser.ARRAY_DELIMITERS),
-        WizardParser.QUOTES
+          .concat(config.symbols.groupBrackets.flat())
+          .concat(config.symbols.arrayBrackets.flat())
+          .concat(config.symbols.negators)
+          .concat(config.symbols.arrayDelimiters),
+        config.symbols.quotes
       ),
       'g'
     )
-    const quoteRegexStr = createQuoteRegexString(WizardParser.QUOTES)
+    const quoteRegexStr = createQuoteRegexString(config.symbols.quotes)
     this.QUOTE_REGEX = new RegExp(quoteRegexStr)
     this.QUOTE_EDGE_REGEX = new RegExp(`^${quoteRegexStr}$`)
-    this.ARRAY_DELIMITER_REGEX = new RegExp(createArrayDelimitRegexString(WizardParser.QUOTES, WizardParser.ARRAY_DELIMITERS), 'g')
+    this.ARRAY_DELIMITER_REGEX = new RegExp(createArrayDelimitRegexString(config.symbols.quotes, config.symbols.arrayDelimiters), 'g')
 
     Object.freeze(config)
   }
@@ -452,7 +476,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     for (const match of matches) {
       WizardParser.pushSanitized(tokens, expression.slice(lastMatchEnd ?? 0, match.index), lastMatchEnd === null ? 0 : lastMatchEnd)
 
-      if (WizardParser.ARRAY_BRACKETS.some(([o]) => match[0] === o)) {
+      if (this.CONFIG.symbols.arrayBrackets.some(([o]) => match[0] === o)) {
         const startToken = {
           content: match[0],
           index: match.index
@@ -468,7 +492,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           ) ++subopenings
 
           if (
-            WizardParser.ARRAY_BRACKETS.some(([o, c]) => match[0] === o && submatch[0] === c)
+            this.CONFIG.symbols.arrayBrackets.some(([o, c]) => match[0] === o && submatch[0] === c)
           ) {
             if (subopenings) --subopenings
             else {
@@ -853,10 +877,10 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       for (let t = 0; t < tokens.length; ++t) {
         const token = tokens[t]!
 
-        if (WizardParser.GROUP_BRACKETS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing parenthesis', tokens, token, _offset + t)
-        if (WizardParser.ARRAY_BRACKETS.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing bracket/brace', tokens, token, _offset + t)
+        if (this.CONFIG.symbols.groupBrackets.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing parenthesis', tokens, token, _offset + t)
+        if (this.CONFIG.symbols.arrayBrackets.some(([, c]) => token.content === c)) throw new ParseError('Unexpected closing bracket/brace', tokens, token, _offset + t)
 
-        const paren = WizardParser.GROUP_BRACKETS.find(([o]) => token.content === o)
+        const paren = this.CONFIG.symbols.groupBrackets.find(([o]) => token.content === o)
         if (paren) {
           if (field || comparisonOperation || value) throw new ParseError('Tried to open a group during an operation', tokens, token, _offset + t)
 
@@ -950,10 +974,10 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           continue
         }
 
-        if (WizardParser.NEGATORS.includes(token.content)) {
+        if (this.CONFIG.symbols.negators.includes(token.content)) {
           const nextToken = tokens[t + 1]
 
-          const nextParen = WizardParser.GROUP_BRACKETS.find(([o]) => nextToken?.content === o)
+          const nextParen = this.CONFIG.symbols.groupBrackets.find(([o]) => nextToken?.content === o)
           if (nextParen) {
             resolveCondition({
               tokens,
@@ -1010,7 +1034,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         }
 
         if (!field) {
-          if (WizardParser.NEGATORS.includes(token.content)) {
+          if (this.CONFIG.symbols.negators.includes(token.content)) {
             if (!this.CONFIG.implicitCondition) throw new ParseError('Could not attempt a negative implicit condition as one is not defined in the config', tokens, token, _offset + t)
 
             const nextToken = tokens[t + 1]
@@ -1059,7 +1083,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
         }
 
         if (!value) {
-          const bracket = WizardParser.ARRAY_BRACKETS.find(([o]) => token.content === o)
+          const bracket = this.CONFIG.symbols.arrayBrackets.find(([o]) => token.content === o)
           if (bracket) {
             const closingIndex = WizardParser.getClosingIndex(tokens, t, bracket[0], bracket[1])
             if (closingIndex === -1) throw new ParseError('Missing closing bracket/brace for array value', tokens, token, _offset + t)
@@ -1097,7 +1121,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             for (let ct = 0; ct < arrayContents.length; ++ct) {
               const contentToken = arrayContents[ct]!
 
-              if (WizardParser.ARRAY_DELIMITERS.includes(contentToken.content)) {
+              if (this.CONFIG.symbols.arrayDelimiters.includes(contentToken.content)) {
                 if (!workingEntry) throw new ParseError('Unexpected blank entry in array', tokens, contentToken, _offset + t + ct)
 
                 resolveEntry(contentToken, _offset + t + ct)
@@ -1241,9 +1265,9 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           }
 
           // TODO: parens as part of dialect
-          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_BRACKETS[0][0]
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += this.CONFIG.symbols.groupBrackets[0][0]
           string += this.stringify(constituent, opts)
-          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += WizardParser.GROUP_BRACKETS[0][1]
+          if ((alwaysParenthesize && constituent.type === 'group') || (expression.operation === 'AND' && constituent.operation === 'OR')) string += this.CONFIG.symbols.groupBrackets[0][1]
         }
 
         break
@@ -1257,9 +1281,9 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           string += transformed
           if (!compact || alpha) string += ' '
           if (Array.isArray(expression.value)) {
-            const join = expression.value.map((v) => this.addQuotesIfNecessary(v)).join(compact ? WizardParser.ARRAY_DELIMITERS[0] : WizardParser.ARRAY_DELIMITERS[0] + ' ')
+            const join = expression.value.map((v) => this.addQuotesIfNecessary(v)).join(compact ? this.CONFIG.symbols.arrayDelimiters[0] : this.CONFIG.symbols.arrayDelimiters[0] + ' ')
 
-            string += `${WizardParser.ARRAY_BRACKETS[0][0]}${join}${WizardParser.ARRAY_BRACKETS[0][1]}`
+            string += `${this.CONFIG.symbols.arrayBrackets[0][0]}${join}${this.CONFIG.symbols.arrayBrackets[0][1]}`
           } else string += this.addQuotesIfNecessary(expression.value)
         }
 
@@ -1279,7 +1303,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             if (coerced.valueOf() === expression.value || bothBoolean) {
               if (bothBoolean && coerced !== expression.value) isNegation = !isNegation
 
-              string += `${isNegation ? WizardParser.NEGATORS[0] : ''}${expression.field}`
+              string += `${isNegation ? this.CONFIG.symbols.negators[0] : ''}${expression.field}`
             } else resolveNonImplicit()
           } else resolveNonImplicit()
         } else resolveNonImplicit()
@@ -1348,18 +1372,18 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
   getPartType (segment: string, activeArrayOpeningBracket?: string): PartType {
     if (segment.match(this.QUOTE_EDGE_REGEX)) return 'quoted'
     if (!isNaN(Number(segment))) return 'number'
-    for (const [opening, closing] of WizardParser.ARRAY_BRACKETS) {
+    for (const [opening, closing] of this.CONFIG.symbols.arrayBrackets) {
       if (!activeArrayOpeningBracket && segment === opening) return 'openingarraybracket'
       else if (activeArrayOpeningBracket === opening && segment === closing) return 'closingarraybracket'
     }
     if (!activeArrayOpeningBracket) {
-      for (const [opening, closing] of WizardParser.GROUP_BRACKETS) {
+      for (const [opening, closing] of this.CONFIG.symbols.groupBrackets) {
         if (segment === opening) return 'openinggroupbracket'
         else if (segment === closing) return 'closinggroupbracket'
       }
     }
-    if (activeArrayOpeningBracket && WizardParser.ARRAY_DELIMITERS.includes(segment)) return 'arraydelimiter'
-    if (!activeArrayOpeningBracket && WizardParser.NEGATORS.includes(segment)) return 'negator'
+    if (activeArrayOpeningBracket && this.CONFIG.symbols.arrayDelimiters.includes(segment)) return 'arraydelimiter'
+    if (!activeArrayOpeningBracket && this.CONFIG.symbols.negators.includes(segment)) return 'negator'
     if (!activeArrayOpeningBracket && segment in this.OPERATOR_DICTIONARY) {
       const type = this.OPERATOR_DICTIONARY[segment]!.type
       if (type === 'sumjunction' || type === 'productjunction') return 'junctionoperator'
