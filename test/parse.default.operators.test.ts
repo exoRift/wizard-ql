@@ -1,6 +1,5 @@
 import { test, expect } from 'bun:test'
 
-// import { type ComparisonOperation, OPERATION_ALIAS_DICTIONARY } from '../src/spec'
 import { WizardParser } from '../src/parser'
 import type { GetConditionOperators } from '../src/spec'
 import { ConstraintError, ParseError } from '../src/errors'

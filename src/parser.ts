@@ -172,7 +172,8 @@ export interface WizardParserConfig<F extends FieldTypeRecord, O extends Operato
   dialects?: Record<D, Record<GetOperators<O>, string>>
 
   /**
-   * Symbol overrides
+   * Symbol overrides.\
+   * Stringification will use the first symbol entry of each symbol type.
    */
   symbols?: {
     quotes?: ReadonlyNonemptyArray<string>
@@ -308,18 +309,17 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     }
   } as const satisfies Record<string, Record<GetOperators<typeof this.DEFAULT_OPERATORS>, string>>
 
-  protected static readonly DEFAULT_QUOTES = ['\'', '"', '`'] as const
-  protected static readonly DEFAULT_NEGATORS = ['!'] as const
-  protected static readonly DEFAULT_ARRAY_DELIMITERS = [','] as const
-
-  protected static readonly DEFAULT_ARRAY_BRACKETS = [
+  static readonly DEFAULT_QUOTES = ['"', '\'', '`'] as const
+  static readonly DEFAULT_NEGATORS = ['!'] as const
+  static readonly DEFAULT_ARRAY_DELIMITERS = [','] as const
+  static readonly DEFAULT_ARRAY_BRACKETS = [
     ['[', ']'],
     ['{', '}']
-  ] as const satisfies Array<[open: string, close: string]>
+  ] as const satisfies Array<[opening: string, closing: string]>
 
-  protected static readonly DEFAULT_GROUP_BRACKETS = [
+  static readonly DEFAULT_GROUP_BRACKETS = [
     ['(', ')']
-  ] as const satisfies Array<[open: string, close: string]>
+  ] as const satisfies Array<[opening: string, closing: string]>
 
   protected readonly OPERATOR_DICTIONARY: InternalOperationDictionary<O>
 
@@ -1221,12 +1221,13 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     }
     if (typeof value !== 'string') return value.toString()
 
-    if (value === 'true') return '"true"'
-    if (value === 'false') return '"false"'
-    if (!isNaN(Number(value))) return `"${value}"`
+    const QUOTE = this.CONFIG.symbols.quotes[0]
+    if (value === 'true') return `${QUOTE}true${QUOTE}`
+    if (value === 'false') return `${QUOTE}false${QUOTE}`
+    if (!isNaN(Number(value))) return `${QUOTE}${value}${QUOTE}`
 
     const escaped = value.replaceAll('\\', '\\\\')
-    if (new RegExp(this.TOKEN_REGEX, 'gi').test(escaped)) return `"${escaped.replaceAll('"', '\\"')}"`
+    if (new RegExp(this.TOKEN_REGEX, 'gi').test(escaped)) return `${QUOTE}${escaped.replaceAll(QUOTE, `\\${QUOTE}`)}${QUOTE}`
     return escaped
   }
 
