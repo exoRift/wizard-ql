@@ -22,13 +22,13 @@ test('parsing with custom symbols', () => {
 })
 
 test('operators contain symbols', () => {
-  expect(new WizardParser({
+  expect(() => new WizardParser({
     symbols: {
       quotes: ['|']
     }
   }), 'symbol definition').toThrow()
 
-  expect(new WizardParser({
+  expect(() => new WizardParser({
     operators: {
       '!': {
         negationName: '!!',
@@ -39,7 +39,7 @@ test('operators contain symbols', () => {
 })
 
 test('symbols reused', () => {
-  expect(new WizardParser({
+  expect(() => new WizardParser({
     symbols: {
       negators: ['!'],
       quotes: ['!']
@@ -48,7 +48,7 @@ test('symbols reused', () => {
 })
 
 test('brackets don\'t equal each other', () => {
-  expect(new WizardParser({
+  expect(() => new WizardParser({
     symbols: {
       arrayBrackets: [['%', '%']]
     }

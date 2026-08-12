@@ -610,7 +610,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @param           fieldTypes     The supported field types
    * @param           operatorTypes  The supported operator types
    * @returns                        The coerced type
-   * @throws  {Error}                Message is 'operator' if the operator type cannot be coerced and 'field' if the field type cannot be coerced
+   * @throws  {Error}                Message is 'operator' if the operator type cannot be coerced, 'field' if the field type cannot be coerced and 'disagreement' if the allowed types for the field and operator have no overlap
    */
   protected coerceType (processedToken: ProcessedToken, fieldTypes: FieldType[], operatorTypes: FieldType[]): Primitive {
     const { raw, unescaped } = processedToken
@@ -652,7 +652,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
 
     if (!operatorHits) throw new Error('operator')
     if (!fieldHits) throw new Error('field')
-    throw new Error('operator')
+    throw new Error('disagreement')
   }
 
   /**
@@ -766,7 +766,8 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       } catch (err) {
         switch ((err as Error).message) {
           case 'operator': throw new ConstraintError(`Value "${condition.value.toString()}" not allowed for operation "${condition.operation}" which only allows for "${operationType}" type`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
-          case 'field': throw new ConstraintError(`Value "${condition.value.toString()}" includes a type not permitted for field "${condition.field}". Allowed types: ${(fieldTypes ?? opTypes).join(', ')}`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+          case 'field': throw new ConstraintError(`Value "${condition.value.toString()}" only has types not permitted for field "${condition.field}". Allowed types: ${(fieldTypes ?? opTypes).join(', ')}`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
+          case 'disagreement': throw new ConstraintError(`Value "${condition.value.toString()}" using operation "${condition.operation}" cannot be coerced into a valid type for "${condition.field}". Allowed field types: ${(fieldTypes ?? ['ALL']).join(', ')}; Allowed operator types: ${opTypes.join(', ')}`, ctx?.tokens, ctx?.startToken, ctx?.startIndex, ctx?.endToken, ctx?.endIndex)
         }
       }
     }

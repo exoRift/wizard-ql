@@ -1185,3 +1185,19 @@ test('type priority', () => {
     validated: true
   })
 })
+
+test.only('type error message for incompatible operator with field type', () => {
+  const parser = new WizardParser({
+    types: {
+      datefield: 'date',
+      stringfield: 'string',
+      numberfield: 'number'
+    }
+  })
+
+  expect(() => parser.parse('datefield ~ "2026-01-01"')).toThrow('Value ""2026-01-01"" using operation "MATCH" cannot be coerced into a valid type for "datefield". Allowed field types: date; Allowed operator types: string')
+  expect(() => parser.parse('datefield ~ string')).toThrow('Value "string" using operation "MATCH" cannot be coerced into a valid type for "datefield". Allowed field types: date; Allowed operator types: string')
+  expect(() => parser.parse('datefield > string')).toThrow('Value "string" only has types not permitted for field "datefield". Allowed types: date')
+  expect(() => parser.parse('stringfield > 5')).toThrow('Value "5" using operation "GREATER" cannot be coerced into a valid type for "stringfield". Allowed field types: string; Allowed operator types: number')
+  expect(() => parser.parse('numberfield > string')).toThrow('Value "string" not allowed for operation "GREATER" which only allows for "numeric" type')
+})
