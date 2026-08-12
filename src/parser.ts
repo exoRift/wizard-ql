@@ -1240,7 +1240,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
    * @returns                    The formatted string
    */
   stringify (
-    expression: Expression<FieldTypeRecord, O>,
+    expression: Expression<F, O>,
     opts: D | StringifyOptions<D>
   ): string {
     const {
@@ -1278,7 +1278,7 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
           const transformed = this.CONFIG.dialects![dialect][expression.operation]
           const alpha = isAlpha(transformed)
 
-          string += expression.field
+          string += expression.field.toString()
           if (!compact || alpha) string += ' '
           string += transformed
           if (!compact || alpha) string += ' '
@@ -1299,13 +1299,20 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
             const opTypes = Array.isArray(this.CONFIG.implicitCondition.asType) ? this.CONFIG.implicitCondition.asType : [this.CONFIG.implicitCondition.asType]
 
             const processed = this.processToken(this.CONFIG.implicitCondition.value)
-            const coerced = this.coerceType(processed, fieldTypes ?? opTypes, opTypes)
+
+            let coerced
+            try {
+              coerced = this.coerceType(processed, fieldTypes ?? opTypes, opTypes)
+            } catch {
+              resolveNonImplicit()
+              break
+            }
             const bothBoolean = (typeof coerced === 'boolean' && typeof expression.value === 'boolean')
 
             if (coerced.valueOf() === expression.value || bothBoolean) {
               if (bothBoolean && coerced !== expression.value) isNegation = !isNegation
 
-              string += `${isNegation ? this.CONFIG.symbols.negators[0] : ''}${expression.field}`
+              string += `${isNegation ? this.CONFIG.symbols.negators[0] : ''}${expression.field.toString()}`
             } else resolveNonImplicit()
           } else resolveNonImplicit()
         } else resolveNonImplicit()

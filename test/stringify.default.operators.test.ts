@@ -117,3 +117,8 @@ test('custom date serialization', () => {
 
   expect(parser.stringify(parsed, 'programmatic'), 'date rep').toBe('datefield > 1778716800000')
 })
+
+test('condenseImplicit properly handles type casting', () => {
+  const parser = new WizardParser({ types: { year: ['number'] } })
+  parser.stringify(parser.parse('year = 2024')!, { dialect: 'programmatic', condenseImplicit: true })
+})

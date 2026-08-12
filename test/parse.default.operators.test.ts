@@ -1186,7 +1186,7 @@ test('type priority', () => {
   })
 })
 
-test.only('type error message for incompatible operator with field type', () => {
+test('type error message for incompatible operator with field type', () => {
   const parser = new WizardParser({
     types: {
       datefield: 'date',
