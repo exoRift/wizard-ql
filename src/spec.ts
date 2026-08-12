@@ -66,13 +66,29 @@ export type GetConditionTSType<T extends ConditionOperatorComparisonType> = {
   array: Primitive[]
 }[T]
 
+/**
+ * The TS type of a condition value belonging to a field with no declared types\
+ * Values are only parsed into dates for fields declared as dates, so a date can only occur when the operator itself is exclusively date-typed
+ */
+export type GetUndeclaredConditionTSType<T extends ConditionOperatorComparisonType> = {
+  primitive: Exclude<Primitive, Date>
+  boolean: boolean
+  string: string
+  number: number
+  date: Date
+  numeric: number
+  array: Array<Exclude<Primitive, Date>>
+}[T]
+
 export interface CheckedCondition<F extends FieldTypeRecord = FieldTypeRecord, O extends OperatorRecord = OperatorRecord, I extends keyof F = keyof F, P extends GetConditionOperators<O> = GetConditionOperators<O>> {
   type: 'condition'
   operation: P
   field: I
-  value: GetOperatorDefinition<O, P>['type'] extends 'array'
-    ? Array<GetFieldTSType<F[I]>>
-    : Extract<GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>, GetFieldTSType<F[I]>>
+  value: string extends I
+    ? GetUndeclaredConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>
+    : GetOperatorDefinition<O, P>['type'] extends 'array'
+      ? Array<GetFieldTSType<F[I]>>
+      : Extract<GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>, GetFieldTSType<F[I]>>
   validated: true
 }
 
@@ -80,9 +96,7 @@ export interface UncheckedCondition<O extends OperatorRecord = OperatorRecord, P
   type: 'condition'
   operation: P
   field: string
-  value: GetOperatorDefinition<O, P>['type'] extends 'array'
-    ? Primitive[]
-    : GetConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>
+  value: GetUndeclaredConditionTSType<GetOperatorDefinition<O, P>['type'] & ConditionOperatorComparisonType>
   validated: false
 }
 

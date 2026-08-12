@@ -8,49 +8,49 @@ test('default operators', () => {
     type: 'condition'
     operation: 'EQUAL'
     field: string
-    value: string | number | boolean | Date
+    value: string | number | boolean
     validated: true
   } | {
     type: 'condition'
     operation: 'NOTEQUAL'
     field: string
-    value: string | number | boolean | Date
+    value: string | number | boolean
     validated: true
   } | {
     type: 'condition'
     operation: 'LESS'
     field: string
-    value: number | Date
+    value: number
     validated: true
   } | {
     type: 'condition'
     operation: 'GEQ'
     field: string
-    value: number | Date
+    value: number
     validated: true
   } | {
     type: 'condition'
     operation: 'GREATER'
     field: string
-    value: number | Date
+    value: number
     validated: true
   } | {
     type: 'condition'
     operation: 'LEQ'
     field: string
-    value: number | Date
+    value: number
     validated: true
   } | {
     type: 'condition'
     operation: 'IN'
     field: string
-    value: Array<string | number | boolean | Date>
+    value: Array<string | number | boolean>
     validated: true
   } | {
     type: 'condition'
     operation: 'NOTIN'
     field: string
-    value: Array<string | number | boolean | Date>
+    value: Array<string | number | boolean>
     validated: true
   } | {
     type: 'condition'
@@ -68,49 +68,49 @@ test('default operators', () => {
     type: 'condition'
     operation: 'EQUAL'
     field: string
-    value: string | number | boolean | Date
+    value: string | number | boolean
     validated: false
   } | {
     type: 'condition'
     operation: 'NOTEQUAL'
     field: string
-    value: string | number | boolean | Date
+    value: string | number | boolean
     validated: false
   } | {
     type: 'condition'
     operation: 'LESS'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'GEQ'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'GREATER'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'LEQ'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'IN'
     field: string
-    value: Array<string | number | boolean | Date>
+    value: Array<string | number | boolean>
     validated: false
   } | {
     type: 'condition'
     operation: 'NOTIN'
     field: string
-    value: Array<string | number | boolean | Date>
+    value: Array<string | number | boolean>
     validated: false
   } | {
     type: 'condition'
@@ -142,25 +142,25 @@ test('custom operators', () => {
     type: 'condition'
     operation: 'FOO'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'BAR'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'FOO'
     field: string
-    value: number | Date
+    value: number
     validated: true
   } | {
     type: 'condition'
     operation: 'BAR'
     field: string
-    value: number | Date
+    value: number
     validated: true
   }
 
@@ -282,13 +282,13 @@ test('custom field types', () => {
     type: 'condition'
     operation: 'FOO'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
     operation: 'BAR'
     field: string
-    value: number | Date
+    value: number
     validated: false
   } | {
     type: 'condition'
@@ -372,6 +372,141 @@ test('custom field types disallow unvalidated', () => {
   })
 
   expectType<CustomTypedExpression | null>(parser.parse(''))
+})
+
+test('explicit date field types', () => {
+  type DateTypedCondition = {
+    type: 'condition'
+    operation: 'EQUAL'
+    field: 'when'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'NOTEQUAL'
+    field: 'when'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'FOO'
+    field: 'when'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: 'when'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'QUX'
+    field: 'when'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'QUUX'
+    field: 'when'
+    value: Date
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'EQUAL'
+    field: 'count'
+    value: number
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'NOTEQUAL'
+    field: 'count'
+    value: number
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'FOO'
+    field: 'count'
+    value: number
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: 'count'
+    value: number
+    validated: true
+  } | {
+    type: 'condition'
+    operation: 'EQUAL'
+    field: string
+    value: string | number | boolean
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'NOTEQUAL'
+    field: string
+    value: string | number | boolean
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'FOO'
+    field: string
+    value: number
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'BAR'
+    field: string
+    value: number
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'QUX'
+    field: string
+    value: Date
+    validated: false
+  } | {
+    type: 'condition'
+    operation: 'QUUX'
+    field: string
+    value: Date
+    validated: false
+  }
+
+  interface DateTypedGroup {
+    type: 'group'
+    operation: 'LOREM' | 'IPSUM'
+    constituents: Array<DateTypedCondition | DateTypedGroup>
+  }
+
+  type DateTypedExpression = DateTypedCondition | DateTypedGroup
+
+  const parser = new WizardParser({
+    types: {
+      when: 'date',
+      count: 'number'
+    },
+    operators: {
+      EQUAL: {
+        type: 'primitive',
+        negationName: 'NOTEQUAL'
+      },
+      FOO: {
+        negationName: 'BAR',
+        type: 'numeric'
+      },
+      QUX: {
+        negationName: 'QUUX',
+        type: 'date'
+      },
+      LOREM: {
+        negationName: 'IPSUM',
+        type: 'sumjunction'
+      }
+    }
+  })
+
+  expectType<DateTypedExpression | null>(parser.parse(''))
 })
 
 test('invalid dialects default', () => {
