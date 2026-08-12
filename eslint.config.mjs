@@ -1,4 +1,4 @@
 import { config } from 'eslint-config'
 
 /** @type {import('eslint').Linter.Config[]} */
-export default await config({ useJSDoc: true })
+export default await config({ useJSDoc: true, ignores: ['dist/'] })
