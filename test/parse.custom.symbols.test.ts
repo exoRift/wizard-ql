@@ -7,16 +7,16 @@ test('parsing with custom symbols', () => {
 
   const customParser = new WizardParser({
     symbols: {
-      groupBrackets: [['{', '}'], ['#', '$']], // Same symbol for both
-      arrayBrackets: [['%', '@']], // Same symbol for both
+      groupBrackets: [['{', '}'], ['#', '$']],
+      arrayBrackets: [['%', '@']],
       arrayDelimiters: [';'],
       negators: ['*'],
-      quotes: ['!']
+      quotes: ['+']
     }
   })
 
   const defaultStatement = '!(foo or bar) && (baz in [1, 2,3, "4"])'
-  const customStatement = '*{foo or bar} && #baz in %1; 2;3; !4!@$'
+  const customStatement = '*{foo or bar} && #baz in %1; 2;3; +4+@$'
 
   expect(customParser.parse(customStatement), 'custom statement matches default statement structurally').toEqual(defaultParser.parse(defaultStatement))
 })
@@ -30,8 +30,8 @@ test('operators contain symbols', () => {
 
   expect(() => new WizardParser({
     operators: {
-      '!': {
-        negationName: '!!',
+      '"': {
+        negationName: '\'',
         type: 'number'
       }
     }
@@ -53,4 +53,10 @@ test('brackets don\'t equal each other', () => {
       arrayBrackets: [['%', '%']]
     }
   }), 'array brackets are equal').toThrow()
+
+  expect(() => new WizardParser({
+    symbols: {
+      groupBrackets: [['%', '%']]
+    }
+  }), 'group brackets are equal').toThrow()
 })

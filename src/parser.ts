@@ -353,6 +353,36 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       if (!config.dialects) config.dialects = WizardParser.DEFAULT_DIALECTS as any
     }
 
+    const symbolPool = new Set<string>()
+
+    config.symbols ??= {}
+    config.symbols.quotes ??= WizardParser.DEFAULT_QUOTES
+    config.symbols.negators ??= WizardParser.DEFAULT_NEGATORS
+    config.symbols.arrayDelimiters ??= WizardParser.DEFAULT_ARRAY_DELIMITERS
+    config.symbols.arrayBrackets ??= WizardParser.DEFAULT_ARRAY_BRACKETS
+    config.symbols.groupBrackets ??= WizardParser.DEFAULT_GROUP_BRACKETS
+
+    for (const [opening, closing] of config.symbols.arrayBrackets) {
+      if (opening === closing) throw Error(`Opening array bracket cannot be the same as closing array bracket ("${opening}")`)
+
+      if (symbolPool.has(opening)) throw Error(`Opening array bracket "${opening}" uses a symbol already defined elsewhere in the parser`)
+      if (symbolPool.has(closing)) throw Error(`Closing array bracket "${closing}" uses a symbol already defined elsewhere in the parser`)
+      symbolPool.add(opening)
+      symbolPool.add(closing)
+    }
+    for (const [opening, closing] of config.symbols.groupBrackets) {
+      if (opening === closing) throw Error(`Opening group bracket cannot be the same as closing group bracket ("${opening}")`)
+
+      if (symbolPool.has(opening)) throw Error(`Opening group bracket "${opening}" uses a symbol already defined elsewhere in the parser`)
+      if (symbolPool.has(closing)) throw Error(`Closing group bracket "${closing}" uses a symbol already defined elsewhere in the parser`)
+      symbolPool.add(opening)
+      symbolPool.add(closing)
+    }
+    for (const quote of config.symbols.quotes) {
+      if (symbolPool.has(quote)) throw Error(`Quote "${quote}" uses a symbol already defined elsewhere in the parser`)
+      symbolPool.add(quote)
+    }
+
     this.FIELD_LIST = new Map()
     if (config.caseInsensitive) {
       if (config.types) {
@@ -367,6 +397,21 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
     this.OPERATOR_DICTIONARY = {} as InternalOperationDictionary<O>
     for (const operationName in config.operators) {
       const operation = config.operators[operationName] as OperatorRecordEntry
+
+      for (const symbol of symbolPool) {
+        if (operationName.includes(symbol)) throw Error(`Operator "${operationName}" contains symbol "${symbol}"`)
+        if (operation.aliases) {
+          for (const alias of operation.aliases) {
+            if (alias.includes(symbol)) throw Error(`Operator "${operationName}" alias "${alias}" contains symbol "${symbol}"`)
+          }
+        }
+        if (operation.negationName.includes(symbol)) throw Error(`Operator "${operation.negationName}" contains symbol "${symbol}"`)
+        if (operation.negationAliases) {
+          for (const alias of operation.negationAliases) {
+            if (alias.includes(symbol)) throw Error(`Operator "${operation.negationName}" alias "${alias}" contains symbol "${symbol}"`)
+          }
+        }
+      }
 
       const opDef = {
         name: operationName,
@@ -406,12 +451,11 @@ export class WizardParser<const F extends FieldTypeRecord, const O extends Opera
       }
     }
 
-    config.symbols ??= {}
-    config.symbols.quotes ??= WizardParser.DEFAULT_QUOTES
-    config.symbols.negators ??= WizardParser.DEFAULT_NEGATORS
-    config.symbols.arrayDelimiters ??= WizardParser.DEFAULT_ARRAY_DELIMITERS
-    config.symbols.arrayBrackets ??= WizardParser.DEFAULT_ARRAY_BRACKETS
-    config.symbols.groupBrackets ??= WizardParser.DEFAULT_GROUP_BRACKETS
+    // Negator is checked after the operators because it's okay for operators to contain the negator
+    for (const negator of config.symbols.negators) {
+      if (symbolPool.has(negator)) throw Error(`Negator "${negator}" uses a symbol already defined elsewhere in the parser`)
+      symbolPool.add(negator)
+    }
 
     this.TOKEN_REGEX = new RegExp(
       createTokenRegexString(
